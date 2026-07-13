@@ -1,0 +1,54 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+wheels/
+*.egg
+.venv/
+venv/
+env/
+
+# --- Node ---
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Build output ---
+dist-ssr/
+*.local
+
+# --- Environment ---
+.env
+.env.local
+.env.*.local
+
+# --- IDE ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Project-specific ---
+# Vector store local data
+data/chroma/
+# Local embedding models (large files)
+backend/models/**/*.safetensors
+backend/models/**/*.bin
+# Local config
+backend/.python-version
+# Logs
+logs/
+*.log
+
+# --- Claude Code ---
+.claude/
+plans/

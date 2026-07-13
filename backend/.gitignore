@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Vector store local data
+data/chroma/
+# Local embedding models (large files)
+models/**/*.safetensors
+models/**/*.bin
+# Local python version
+.python-version
+# Logs
+logs/
+*.log
+
+# --- Claude Code ---
+.claude/
+plans/
