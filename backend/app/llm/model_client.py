@@ -19,7 +19,9 @@ def _init_llm():
                           openai_api_base="https://api.deepseek.com/v1",**common)
     elif settings.LLM_PROVIDER == "openai":
         return ChatOpenAI(model=settings.LLM_MODEL,openai_api_key=settings.LLM_API_KEY,**common)
-    
+    elif settings.LLM_PROVIDER == "myopenai":
+        return ChatOpenAI(model=settings.LLM_MODEL,openai_api_key=settings.LLM_API_KEY,
+                          openai_api_base=settings.LLM_API_BASE,**common)
     else:
         raise ValueError(f'不支持这个服务商:{settings.LLM_PROVIDER}')
 
