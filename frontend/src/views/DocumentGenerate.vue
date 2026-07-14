@@ -29,16 +29,21 @@ onMounted(async () => {
 })
 
 function parseParams() {
-  const lines = paramsText.value.trim().split('\n').filter(Boolean)
+  const lines = paramsText.value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
   const params = {}
   for (const line of lines) {
-    const colonIdx = line.indexOf('：')
-    if (colonIdx > 0) {
-      const key = line.slice(0, colonIdx).trim()
-      const val = line.slice(colonIdx + 1).trim()
-      if (key && val) params[key] = val
-    }
+    const match = line.match(/^([^:：]+)[:：]\s*(.+)$/)
+    if (!match) continue
+
+    const key = match[1].trim()
+    const val = match[2].trim()
+    if (key && val) params[key] = val
   }
+
   return params
 }
 

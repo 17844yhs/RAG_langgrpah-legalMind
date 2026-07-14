@@ -18,7 +18,7 @@ class HybridRetriever:
         self.vector_retriever = self.vector_store.as_retriever(
             search_kwargs={"k": settings.RAG_TOP_K * 2}
         )
-
+        self.bm25_retriever = None 
         # BM25 检索器 — 从向量库中加载已有文档来初始化
         self._init_bm25_from_store()
     
