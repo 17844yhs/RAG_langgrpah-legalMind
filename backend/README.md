@@ -19,14 +19,14 @@
 
 参考 `app/config.py` 中的 `Settings` 类，支持通过 `.env` 文件配置：
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DATABASE_URL` | PostgreSQL 连接字符串 | `postgresql://user:password@localhost:5432/legal_db` |
-| `REDIS_URL` | Redis 连接字符串 | `redis://localhost:6379/0` |
-| `SECRET_KEY` | JWT 签名密钥 | `secret-key` |
-| `LLM_API_KEY` | LLM API 密钥 | — |
-| `LLM_MODEL` | LLM 模型名 | `gpt-4-turbo-preview` |
-| `EMBEDDING_MODEL` | Embedding 模型 | `BAAI/bge-small-zh` |
+| 变量                | 说明                  | 默认值                                                 |
+| ------------------- | --------------------- | ------------------------------------------------------ |
+| `DATABASE_URL`    | PostgreSQL 连接字符串 | `postgresql://user:password@localhost:5432/legal_db` |
+| `REDIS_URL`       | Redis 连接字符串      | `redis://localhost:6379/0`                           |
+| `SECRET_KEY`      | JWT 签名密钥          | `secret-key`                                         |
+| `LLM_API_KEY`     | LLM API 密钥          | —                                                     |
+| `LLM_MODEL`       | LLM 模型名            | `gpt-4-turbo-preview`                                |
+| `EMBEDDING_MODEL` | Embedding 模型        | `BAAI/bge-small-zh`                                  |
 
 完整配置项见 [config.py](app/config.py)。
 

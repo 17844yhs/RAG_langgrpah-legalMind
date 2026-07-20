@@ -69,7 +69,7 @@ async def send_message(request:ChatRequest,user=Depends(get_current_user)):
 
 @router.post("/stream")
 async def stream_message(request: ChatRequest, user=Depends(get_current_user)):
-    """发送消息（流式响应）"""
+    """发送消息（流式响应），要么qa要么document"""
     user_obj = await _get_user_obj(user)
     session_id = request.session_id or str(uuid.uuid4())
     session = await _ensure_session(session_id, user_obj)
@@ -78,14 +78,14 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user)):
     async def generate():
         full_text =""
         try:
-            # 消费的异步生成器是节点state的增量
+            # 消费的异步生成器是节点state的增量（stream_mode="messages" 只返回AIMessageChunk）
             async for chunk, metadata in workflow.astream(query=query,thread_id=session_id):
                 node = metadata.get("langgraph_node") if metadata else None
                 if node == "qa_generation" and chunk.content:
                     full_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
                 
-            # 流式模式不暴露最终 state，需单独读取（取 sources；并为 search/document 意图兜底）
+            # 流式模式不暴露最终 state,需单独读取（取 sources也即是没有返回的元数据；并为 search/document 意图兜底）
             # 整个图执行完毕后的最终完整 state 快照，而不是每个节点增量
             graph = workflow.get_graph()
             config = {"configurable": {"thread_id": session_id}}
