@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     RAG_SCORE_THRESHOLD: float = 0.7
     RERANK_ENABLED: bool = True
 
+    # LangSmith 配置
+    LANGSMITH_TRACING: bool = True
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "legalmind"
     class Config:
         env_file = ".env"
         case_sensitive = True # 区分大小写
