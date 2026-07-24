@@ -139,7 +139,7 @@ class LegalMindWorkflow:
         config = {"configurable":{"thread_id":thread_id}}
         init_stat ={
             "query":query,
-            "message": [HumanMessage(content=query)],
+            "messages": [HumanMessage(content=query)],
         }
         result = await self.get_graph().ainvoke(init_stat,config=config)
         return result
@@ -148,7 +148,7 @@ class LegalMindWorkflow:
         config = {"configurable":{"thread_id":thread_id}}
         init_stat ={
             "query":query,
-            "message": [HumanMessage(content=query)],
+            "messages": [HumanMessage(content=query)],
         }
         async for chunk ,metadata in self.get_graph().astream(init_stat,config=config,stream_mode ="messages"):
             yield chunk,metadata

@@ -16,7 +16,7 @@ def _init_llm():
         }
     if settings.LLM_PROVIDER =="deepseek":
         return ChatOpenAI(model=settings.LLM_MODEL,openai_api_key=settings.LLM_API_KEY,
-                          openai_api_base="https://api.deepseek.com/v1",**common)
+                          openai_api_base=settings.LLM_API_BASE,**common)
     elif settings.LLM_PROVIDER == "openai":
         return ChatOpenAI(model=settings.LLM_MODEL,openai_api_key=settings.LLM_API_KEY,**common)
     elif settings.LLM_PROVIDER == "myopenai_ollma":

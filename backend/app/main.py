@@ -1,7 +1,19 @@
 """FastAPI 应用主入口"""
+import os
 import sys
 import asyncio
 from contextlib import asynccontextmanager
+
+from app.config import settings
+
+# ── LangSmith 追踪注入 ──────────────────────────────────
+# LangChain 自动追踪检查的是 os.environ，不是 pydantic Settings
+# 必须在这里把配置值回写到环境变量，追踪才能真正生效
+if settings.LANGSMITH_TRACING:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGSMITH_ENDPOINT
+    os.environ["LANGCHAIN_API_KEY"] = settings.LANGSMITH_API_KEY
+    os.environ["LANGCHAIN_PROJECT"] = settings.LANGSMITH_PROJECT
 
 
 # Windows 上 psycopg（AsyncPostgresSaver）的 async 模式需要 SelectorEventLoop。
@@ -23,7 +35,6 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
 from app.db.database import init_db,close_db
 from app.rag.vector_store import init_vector_store
 from app.llm.checkpoint import init_checkpointer,close_checkpointer

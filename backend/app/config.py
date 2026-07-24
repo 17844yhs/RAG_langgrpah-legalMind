@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4-turbo-preview"
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 4096
+    LLM_API_BASE :str = ""
 
     # Embedding 配置
     EMBEDDING_PROVIDER: str = "huggingface"  # openai, huggingface
@@ -39,6 +40,11 @@ class Settings(BaseSettings):
     RAG_SCORE_THRESHOLD: float = 0.7
     RERANK_ENABLED: bool = True
 
+    # LangSmith 配置
+    LANGSMITH_TRACING: bool = True
+    LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "legal"
     class Config:
         env_file = ".env"
         case_sensitive = True # 区分大小写
