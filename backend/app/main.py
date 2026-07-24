@@ -5,14 +5,16 @@ from contextlib import asynccontextmanager
 
 
 # Windows 上 psycopg（AsyncPostgresSaver）的 async 模式需要 SelectorEventLoop。
-# uvicorn 在 Windows 默认通过 loop_factory 使用 ProactorEventLoop——而 loop_factory
-# 优先于全局 event_loop_policy，故仅设 policy 无效。这里直接 patch uvicorn 的
-# loop factory 强制返回 SelectorEventLoop。本模块在 uvicorn Config.load() 阶段被
-# import，早于 Server.run() 的 get_loop_factory()，时机满足（reload 子进程同理）。
+# uvicorn 0.49.0 的 get_loop_factory() 存在 bug：它调用 factory 函数后直接返回
+# 事件循环对象，而不是返回 factory 函数本身。asyncio_run() 期望 loop_factory 是
+# 可调用对象，导致 TypeError。修复方案：设置 SelectorEventLoop 策略，并让
+# get_loop_factory() 返回 None，这样 asyncio.Runner 会使用 new_event_loop()
+# 创建事件循环，而 new_event_loop() 会遵循全局的 event_loop_policy。
 if sys.platform == "win32":
     try:
-        import uvicorn.loops.asyncio as _uvicorn_aio
-        _uvicorn_aio.asyncio_loop_factory = lambda use_subprocess=False: asyncio.SelectorEventLoop()
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        from uvicorn.config import Config
+        Config.get_loop_factory = lambda self: None
     except ImportError:
         pass
 

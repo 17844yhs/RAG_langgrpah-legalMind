@@ -12,12 +12,17 @@ def get_embeddings():
     global _embeddings
     if _embeddings is None:
         model_name = settings.EMBEDDING_MODEL
-        local_path = os.path.join(_LOCAL_MODEL_DIR, model_name.split("/")[-1])
-        if os.path.isdir(local_path):
-            model_name = local_path  # 本地有就用本地的
-            _embeddings = HuggingFaceEmbeddings(
-                model_name= model_name,
-                model_kwargs={"device": "cpu"},
-                encode_kwargs={"normalize_embeddings": True},  # L2归一化
-            )
+        hf_cache_path = os.path.join(_LOCAL_MODEL_DIR, f"models--{model_name.replace('/', '--')}")
+        if os.path.isdir(hf_cache_path):
+            snapshots_dir = os.path.join(hf_cache_path, "snapshots")
+            if os.path.isdir(snapshots_dir):
+                hashes = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
+                if hashes:
+                    model_name = os.path.join(snapshots_dir, hashes[0])
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=model_name,
+            cache_folder=_LOCAL_MODEL_DIR,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
     return _embeddings
