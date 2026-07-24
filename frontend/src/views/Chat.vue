@@ -5,6 +5,7 @@ import { useChatStore } from '../stores/chat'
 import ChatSidebar from '../components/chat/ChatSidebar.vue'
 import ChatMessage from '../components/chat/ChatMessage.vue'
 import ChatInput from '../components/chat/ChatInput.vue'
+import InterruptCard from '../components/chat/InterruptCard.vue'
 
 const route = useRoute()
 const chat = useChatStore()
@@ -27,9 +28,9 @@ watch(() => route.params.sessionId, (newVal) => {
   }
 })
 
-// 自动滚动到底部
+// 自动滚动到底部 — 监听消息数量 + 最后一条消息内容变化（流式输出时内容持续增长）
 watch(
-  () => chat.messages.length,
+  () => [chat.messages.length, chat.messages.at(-1)?.content?.length],
   async () => {
     await nextTick()
     messagesEnd.value?.scrollIntoView({ behavior: 'smooth' })
@@ -75,8 +76,11 @@ watch(
         </div>
       </div>
 
-      <!-- 输入区 -->
-      <ChatInput />
+      <!-- Human-in-the-Loop 交互卡片（被 interrupt 打断时显示） -->
+      <InterruptCard />
+
+      <!-- 输入区（无 interrupt 时显示） -->
+      <ChatInput v-if="!chat.pendingInterrupt" />
     </div>
   </div>
 </template>

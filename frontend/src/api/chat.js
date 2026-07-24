@@ -16,24 +16,11 @@ export async function deleteSession(sessionId) {
 }
 
 /**
- * 流式发送消息
- * 返回一个对象 { abort, stream }
- * stream 是一个 AsyncGenerator，yield { content: string } 或 { sources: [...] } 或 { done: true }
+ * 解析 SSE 流，yield 结构化事件
+ * 事件类型：{ content: string } | { sources: [...] } | { interrupt: {...} } | { done: true }
  */
-export function streamSendMessage(message, sessionId) {
-  const controller = new AbortController()
-
+function parseSSEStream(response, controller) {
   async function* generate() {
-    const response = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('token')}`,
-      },
-      body: JSON.stringify({ message, session_id: sessionId || null }),
-      signal: controller.signal,
-    })
-
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
@@ -48,7 +35,7 @@ export function streamSendMessage(message, sessionId) {
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
-      buffer = lines.pop() || '' // 保留未完成的行
+      buffer = lines.pop() || ''
 
       for (const line of lines) {
         const trimmed = line.trim()
@@ -59,8 +46,7 @@ export function streamSendMessage(message, sessionId) {
           return
         }
         try {
-          const parsed = JSON.parse(payload)
-          yield parsed
+          yield JSON.parse(payload)
         } catch {
           // 忽略无法解析的数据
         }
@@ -69,4 +55,58 @@ export function streamSendMessage(message, sessionId) {
   }
 
   return { abort: () => controller.abort(), stream: generate() }
+}
+
+/**
+ * 流式发送新消息
+ * POST /api/chat/stream
+ */
+export function streamSendMessage(message, sessionId) {
+  const controller = new AbortController()
+
+  const response = fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${localStorage.getItem('token')}`,
+    },
+    body: JSON.stringify({ message, session_id: sessionId || null }),
+    signal: controller.signal,
+  })
+
+  // 注意：fetch 返回 Promise<Response>，需要在 generate 里 await
+  async function* wrappedGenerate() {
+    const res = await response
+    const parsed = parseSSEStream(res, controller)
+    yield* parsed.stream
+  }
+
+  return { abort: () => controller.abort(), stream: wrappedGenerate() }
+}
+
+/**
+ * 恢复被 interrupt 打断的图执行
+ * POST /api/chat/resume
+ * 同样返回 SSE 流（因为 resume 后可能触发下一个 interrupt）
+ */
+export function streamResumeMessage(sessionId, userResponse) {
+  const controller = new AbortController()
+
+  const response = fetch('/api/chat/resume', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${localStorage.getItem('token')}`,
+    },
+    body: JSON.stringify({ session_id: sessionId, response: userResponse }),
+    signal: controller.signal,
+  })
+
+  async function* wrappedGenerate() {
+    const res = await response
+    const parsed = parseSSEStream(res, controller)
+    yield* parsed.stream
+  }
+
+  return { abort: () => controller.abort(), stream: wrappedGenerate() }
 }
