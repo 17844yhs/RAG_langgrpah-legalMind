@@ -37,31 +37,4 @@ async def check_intent(state):
     }
 
 
-async def check_retrieval(state):
-    """检索结果不足时，建议用户补充信息。
-
-    触发条件：retrieved_cases 数量 < 3
-    用户 resume 后，将补充信息拼入 query，由下游检索节点重新检索。
-    """
-    cases = state.get("retrieved_cases", [])
-    if len(cases) >= 3:
-        return {}  # 结果充足，直接放行
-
-    hint = (
-        f"目前只找到 {len(cases)} 条相关案例，信息可能不够充分。\n"
-        f"您可以补充以下信息帮助我更精准地检索：\n"
-        f"- 具体的案由或案件类型（如劳动争议、合同纠纷）\n"
-        f"- 涉及的法律法规名称\n"
-        f"- 关键的案件事实描述"
-    )
-
-    user_supplement = interrupt({
-        "type": "need_more_info",
-        "hint": hint,
-        "current_count": len(cases),
-    })
-
-    return {
-        "user_supplement": user_supplement,
-        "query": state["query"] + " " + user_supplement,
-    }
+# check_retrieval 已移入 retrieval_agent.py 的 evaluate_node（子图内部 HITL）

@@ -9,8 +9,8 @@ from langgraph.graph.message import add_messages
 from app.agents.intent_agent import IntentAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.document_agent import DocumentAgent
-from app.agents.retrieval_agent import RetrievalAgent
-from app.agents.human_loop import check_intent, check_retrieval
+from app.agents.retrieval_agent import retrieval_subgraph
+from app.agents.human_loop import check_intent
 from app.llm.checkpoint import get_checkpointer
 
 
@@ -35,17 +35,15 @@ class LegalMindWorkflow:
         self.intent_agent = IntentAgent()
         self.qa_agent = QAAgent()
         self.document_agent = DocumentAgent()
-        self.retrieval_agent = RetrievalAgent()
         self._graph = None
 
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(AgentState)
 
-        # ── 添加节点 ──
+        #  添加节点 
         workflow.add_node("intent_recognition", self._intent_node)
         workflow.add_node("check_intent", check_intent)          # HITL #1
-        workflow.add_node("case_retrieval", self._retrieval_node)
-        workflow.add_node("check_retrieval", check_retrieval)     # HITL #2
+        workflow.add_node("retrieval_agent", retrieval_subgraph)  # ReAct 检索子图（内含 HITL #2）
         workflow.add_node("qa_generation", self._qa_node)
         workflow.add_node("document_generation", self._document_node)
         workflow.add_node("final_output", self._output_node)
@@ -55,14 +53,13 @@ class LegalMindWorkflow:
         workflow.set_entry_point("intent_recognition")
         workflow.add_edge("intent_recognition", "check_intent")
         workflow.add_conditional_edges("check_intent", self._router_by_intent, {
-            "qa": "case_retrieval",
-            "search": "case_retrieval",
+            "qa": "retrieval_agent",
+            "search": "retrieval_agent",
             "document": "document_generation",
         })
 
-        # case_retrieval → check_retrieval → (条件路由)
-        workflow.add_edge("case_retrieval", "check_retrieval")
-        workflow.add_conditional_edges("check_retrieval", self._route_after_retrieval, {
+        # retrieval_agent（ReAct 子图）→ (条件路由)
+        workflow.add_conditional_edges("retrieval_agent", self._route_after_retrieval, {
             "qa": "qa_generation",
             "search": "final_output",
         })
@@ -81,10 +78,6 @@ class LegalMindWorkflow:
             "intent": result.intent,
             "intent_confidence": result.confidence,
         }
-
-    async def _retrieval_node(self, state: AgentState) -> dict:
-        cases = await self.retrieval_agent.retrieve(query=state.get("query"), top_k=5)
-        return {"retrieved_cases": cases}
 
     async def _qa_node(self, state: AgentState) -> dict:
         cases = state["retrieved_cases"]
@@ -209,5 +202,5 @@ workflow = LegalMindWorkflow()
 # Human-in-the-Loop (HITL) 说明：
 # - interrupt() 暂停图执行，将数据发送给前端
 # - Command(resume=value) 恢复图执行，用户回答作为 interrupt() 的返回值
-# - 两个 HITL 节点：check_intent（意图确认）和 check_retrieval（检索质量）
+# - 两个 HITL 节点：check_intent（意图确认，主图）和 evaluate（检索质量，retrieval 子图内）
 # ============================================================

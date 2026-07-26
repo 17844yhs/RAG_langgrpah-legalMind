@@ -1,4 +1,5 @@
 from langchain_openai import ChatOpenAI
+from langchain_deepseek import ChatDeepSeek
 from app.config import settings
 
 _llm = None
@@ -14,9 +15,13 @@ def _init_llm():
         "temperature": settings.LLM_TEMPERATURE, 
         "max_tokens": settings.LLM_MAX_TOKENS
         }
+    # DeepSeek 使用 langchain-deepseek 官方封装
+    # V4 Flash 默认开启思考模式，但思考模式不支持 tool_choice，需手动关闭
     if settings.LLM_PROVIDER =="deepseek":
-        return ChatOpenAI(model=settings.LLM_MODEL,openai_api_key=settings.LLM_API_KEY,
-                          openai_api_base=settings.LLM_API_BASE,**common)
+        return ChatDeepSeek(model=settings.LLM_MODEL,api_key=settings.LLM_API_KEY,
+                          base_url=settings.LLM_API_BASE,
+                          extra_body={"thinking": {"type": "disabled"}},
+                          **common)
     elif settings.LLM_PROVIDER == "openai":
         return ChatOpenAI(model=settings.LLM_MODEL,openai_api_key=settings.LLM_API_KEY,**common)
     elif settings.LLM_PROVIDER == "myopenai_ollma":
