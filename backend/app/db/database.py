@@ -18,7 +18,9 @@ async def init_db():
                 "app.models.user",
                 "app.models.case",
                 "app.models.chat",
-                "app.models.document"
+                "app.models.document",
+                "app.models.law",
+                "app.models.eval_dataset"
             ]
         },
         _enable_global_fallback=True, # 兼容 Windows
