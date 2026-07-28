@@ -1,7 +1,6 @@
 """将 PostgreSQL 中的案例 + 法律法规数据导入 ChromaDB 向量库
 
-加入文本分块：RecursiveCharacterTextSplitter 将长文档切成 chunk，
-避免超出 embedding 模型的 token 上限导致信息截断。
+法律用 1000 字 chunk（覆盖 2-3 个相关条文），案例用 500 字 chunk。
 """
 import asyncio
 import sys
@@ -22,10 +21,15 @@ async def build_index():
     from app.models.case import Case
     from app.models.law import Law
 
-    documents = []
+    all_chunks = []
 
-    # ── 1. 索引案例 ──
+    # ── 1. 索引案例（500字切分）──
     cases = await Case.all()
+    case_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50,
+        separators=["\n\n", "\n", "。", "；", "，", " "],
+    )
     for case in cases:
         doc = Document(
             page_content=f"{case.title}\n{case.summary or ''}\n{case.content or ''}",
@@ -41,11 +45,16 @@ async def build_index():
                 "laws": case.laws,
             },
         )
-        documents.append(doc)
+        all_chunks.extend(case_splitter.split_documents([doc]))
     print(f"  案例：{len(cases)} 条")
 
-    # ── 2. 索引法律法规 ──
+    # ── 2. 索引法律法规（1000字切分，覆盖多个相关条文）──
     laws = await Law.all()
+    law_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=100,
+        separators=["\n\n", "\n", "。", "；", "，", " "],
+    )
     for law in laws:
         keywords_str = " ".join(law.keywords) if law.keywords else ""
         doc = Document(
@@ -58,56 +67,35 @@ async def build_index():
                 "keywords": law.keywords,
             },
         )
-        documents.append(doc)
+        all_chunks.extend(law_splitter.split_documents([doc]))
     print(f"  法律法规：{len(laws)} 条")
 
-    if not documents:
-        print("  数据库中没有数据，请先运行 import_eval_data.py 和 seed_cases.py")
+    if not all_chunks:
+        print("  数据库中没有数据，请先运行 import_eval_data.py")
         await Tortoise.close_connections()
         return
 
-    # ── 3. 文本分块 ──
-    # 分块后每个 chunk 单独做 embedding，保留完整语义
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", "。", "；", "，", " "],
-    )
-    chunks = splitter.split_documents(documents)
-    print(f"  分块：{len(documents)} 条文档 → {len(chunks)} 个 chunk")
+    print(f"  分块完成：{len(all_chunks)} 个 chunk")
 
-    # ── 4. 清空旧索引并写入向量库 ──
+    # ── 3. 清空旧索引并写入向量库 ──
     from app.rag.vector_store import get_vector_store
     vector_store = get_vector_store()
 
-    # 清空旧数据，避免追加导致新旧数据混合
     try:
         collection = vector_store._collection
         old_count = collection.count()
         if old_count > 0:
-            # 删除所有旧文档
             collection.delete(ids=collection.get()["ids"])
             print(f"  已清空旧索引：{old_count} 条")
     except Exception as e:
         print(f"  清空旧索引失败（可能是空库）：{e}")
 
-    vector_store.add_documents(chunks)
+    vector_store.add_documents(all_chunks)
 
-    print(f"\n✅ 已导入 {len(chunks)} 个 chunk 到向量库（来自 {len(documents)} 条文档）")
+    print(f"\n✅ 已导入 {len(all_chunks)} 个 chunk 到向量库")
     await Tortoise.close_connections()
 
 
 if __name__ == "__main__":
     print("🔨 开始构建向量索引...")
     asyncio.run(build_index())
-
-
-# ============================================================
-# 旧版（不分块，整条文档直接入向量库），保留备查
-# ============================================================
-#
-# # ── 3. 写入向量库 ──
-# from app.rag.vector_store import get_vector_store
-# vector_store = get_vector_store()
-# vector_store.add_documents(documents)
-# print(f"\n✅ 已导入 {len(documents)} 条文档到向量库")
