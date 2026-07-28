@@ -40,9 +40,8 @@ Thumbs.db
 # --- Project-specific ---
 # Vector store local data
 data/chroma/
-# Local embedding models (large files)
-backend/models/**/*.safetensors
-backend/models/**/*.bin
+# Local embedding models (large files, entire directory)
+backend/models/
 # Local config
 backend/.python-version
 # Logs

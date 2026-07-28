@@ -11,9 +11,8 @@ wheels/
 
 # Vector store local data
 data/chroma/
-# Local embedding models (large files)
-models/**/*.safetensors
-models/**/*.bin
+# Local embedding models (large files, entire directory)
+models/
 # Local python version
 .python-version
 # Logs

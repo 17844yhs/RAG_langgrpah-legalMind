@@ -1,7 +1,8 @@
 """将 legal_eval_dataset.json 中的法律法规和评估样本导入 PostgreSQL
 
-用法：cd backend && python scripts/import_eval_data.py
+用法：cd backend && uv run scripts/import_eval_data.py [--data data/legal_eval_dataset_v2.json]
 """
+import argparse
 import asyncio
 import json
 import os
@@ -9,10 +10,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "legal_eval_dataset.json")
+DEFAULT_DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "legal_eval_dataset_v2.json")
 
 
-async def import_data():
+async def import_data(data_file: str = DEFAULT_DATA_FILE):
     from tortoise import Tortoise
 
     db_url = "postgres://legal_user:legal_pass@localhost:5432/legal_db"
@@ -35,7 +36,8 @@ async def import_data():
     from app.models.eval_dataset import EvalSample
 
     # 读取 JSON
-    with open(DATA_FILE, encoding="utf-8") as f:
+    print(f"  数据文件：{data_file}")
+    with open(data_file, encoding="utf-8") as f:
         data = json.load(f)
 
     # ── 1. 导入法律法规 ──
@@ -107,6 +109,10 @@ async def import_data():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="导入评估数据到 PostgreSQL")
+    parser.add_argument("--data", default=DEFAULT_DATA_FILE, help="数据文件路径（默认 legal_eval_dataset.json）")
+    args = parser.parse_args()
+
     print("📥 开始导入评估数据到 PostgreSQL...")
-    asyncio.run(import_data())
+    asyncio.run(import_data(args.data))
     print("✅ 导入完成")

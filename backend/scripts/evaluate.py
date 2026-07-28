@@ -1,8 +1,10 @@
-"""RAG 评估脚本 — LLM-as-Judge 四维度打分
+"""RAG 评估脚本 — 支持自定义 LLM Judge 和 RAGAS 两种模式
 
-流程：读取评估样本 → 检索上下文 → LLM 生成答案 → LLM Judge 打分 → 结果入库 + JSON 报告
+流程：读取评估样本 → 检索上下文 → LLM 生成答案 → 打分 → 结果入库 + JSON 报告
 
-用法：cd backend && python scripts/evaluate.py [--run_name baseline_v1] [--limit 10]
+用法：
+  cd backend && uv run scripts/evaluate.py [--run_name baseline_v1] [--limit 10]
+  cd backend && uv run scripts/evaluate.py --ragas [--limit 5]
 """
 import asyncio
 import json
@@ -59,13 +61,16 @@ ANSWER_PROMPT = """你是一个法律咨询助手。请根据以下参考资料�
 请直接回答问题："""
 
 
-async def retrieve_contexts(query: str, top_k: int = 5) -> List[Dict]:
-    """使用 HybridRetriever 检索相关文档"""
-    from app.rag.retriever import HybridRetriever
-    retriever = HybridRetriever()
-    results = await retriever.retrieve(query=query, top_k=top_k)
-    return results
+_retrieval_agent = None
 
+async def retrieve_contexts(query: str, top_k: int = 5) -> List[Dict]:
+    """使用 RetrievalAgent 检索相关文档（HybridRetriever + Reranker）"""
+    global _retrieval_agent
+    if _retrieval_agent is None:
+        from app.agents.retrieval_agent import RetrievalAgent
+        _retrieval_agent = RetrievalAgent()
+    results = await _retrieval_agent.retrieve(query=query, top_k=top_k)
+    return results
 
 async def generate_answer(question: str, contexts: List[Dict]) -> str:
     """根据检索到的上下文生成答案"""
@@ -239,14 +244,185 @@ async def run_evaluation(run_name: str, limit: int = 0):
     return report
 
 
+async def run_ragas_evaluation(run_name: str, limit: int = 0):
+    """使用 RAGAS 框架评估 RAG 管线"""
+    from tortoise import Tortoise
+    from app.models.eval_dataset import EvalSample
+    from app.llm.model_client import get_llm
+
+    # 连接数据库
+    db_url = "postgres://legal_user:legal_pass@localhost:5432/legal_db"
+    await Tortoise.init(
+        db_url=db_url,
+        modules={
+            "models": [
+                "app.models.case", "app.models.law", "app.models.eval_dataset",
+            ]
+        },
+        _enable_global_fallback=True,
+        use_tz=False,
+    )
+    await Tortoise.generate_schemas(safe=True)
+
+    # 加载评估样本
+    samples = await EvalSample.all()
+    if limit > 0:
+        samples = samples[:limit]
+    print(f"  加载了 {len(samples)} 条评估样本")
+
+    # ── 第一阶段：收集数据（检索 + 生成答案）──
+    questions = []
+    answers = []
+    ground_truths = []
+    contexts_list = []
+    detail_results = []
+
+    for i, sample in enumerate(samples):
+        print(f"\n[{i+1}/{len(samples)}] {sample.question[:40]}...")
+
+        # 检索
+        contexts = await retrieve_contexts(sample.question, top_k=5)
+        context_texts = [
+            f"{c.get('title', '')}\n{c.get('content', c.get('summary', ''))}"
+            for c in contexts
+        ]
+        context_titles = [c.get("title", "未知") for c in contexts]
+        print(f"   检索到 {len(contexts)} 条上下文")
+
+        # 生成答案
+        answer = await generate_answer(sample.question, contexts)
+        print(f"   生成答案：{answer[:60]}...")
+
+        questions.append(sample.question)
+        answers.append(answer)
+        ground_truths.append([sample.ground_truth])  # RAGAS 要求 list of list
+        contexts_list.append(context_texts)
+
+        detail_results.append({
+            "sample_id": sample.id,
+            "question": sample.question,
+            "ground_truth": sample.ground_truth,
+            "generated_answer": answer,
+            "retrieved_contexts": context_titles,
+        })
+
+    # ── 第二阶段：RAGAS 批量评估 ──
+    print(f"\n{'='*50}")
+    print("  正在运行 RAGAS 评估...")
+
+    # RAGAS 0.4.x 兼容补丁 — ChatVertexAI 在新版 langchain_community 中已移除
+    import importlib
+    import sys as _sys
+    import types as _types
+    _mod_path = "langchain_community.chat_models.vertexai"
+    if _mod_path not in _sys.modules:
+        try:
+            importlib.import_module(_mod_path)
+        except (ImportError, ModuleNotFoundError):
+            _stub = _types.ModuleType(_mod_path)
+            _stub.ChatVertexAI = type("ChatVertexAI", (), {})
+            _sys.modules[_mod_path] = _stub
+
+    from datasets import Dataset
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from ragas import evaluate as ragas_evaluate
+        from ragas.metrics import (
+            faithfulness,
+            answer_relevancy,
+            context_precision,
+            context_recall,
+        )
+
+    dataset = Dataset.from_dict({
+        "question": questions,
+        "answer": answers,
+        "reference": [gt[0] for gt in ground_truths],  # RAGAS 0.4.x 列名
+        "contexts": contexts_list,
+    })
+
+    # 使用项目的 LLM 作为 RAGAS 评估模型
+    llm = get_llm()
+
+    # 在独立线程中运行 RAGAS，避免 asyncio 嵌套冲突
+    import concurrent.futures
+
+    def _run_ragas_sync():
+        # 包装 LLM
+        try:
+            from ragas.llms import LangchainLLMWrapper
+            ragas_llm = LangchainLLMWrapper(llm)
+        except Exception:
+            ragas_llm = llm
+        # 包装 Embeddings（用项目的 bge-small-zh，避免依赖 OpenAI）
+        ragas_emb = None
+        try:
+            from app.rag.embeddings import get_embeddings
+            from ragas.embeddings import LangchainEmbeddingsWrapper
+            ragas_emb = LangchainEmbeddingsWrapper(get_embeddings())
+        except Exception:
+            pass
+        kwargs = dict(
+            dataset=dataset,
+            metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+            llm=ragas_llm,
+        )
+        if ragas_emb:
+            kwargs["embeddings"] = ragas_emb
+        return ragas_evaluate(**kwargs)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, _run_ragas_sync)
+
+    # ── 输出结果 ──
+    df = result.to_pandas() if hasattr(result, 'to_pandas') else None
+
+    if df is not None:
+        avg = df.mean(numeric_only=True)
+        print(f"\n{'='*50}")
+        print(f"RAGAS 评估完成：{run_name}")
+        print(f"样本数：{len(samples)}")
+        for col in avg.index:
+            print(f"  {col}: {avg[col]:.4f}")
+
+        # 保存详细结果
+        report_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+        report_path = os.path.join(report_dir, "ragas_results.json")
+        report_data = {
+            "run_name": run_name,
+            "total_samples": len(samples),
+            "created_at": datetime.now().isoformat(),
+            "averages": {col: round(float(avg[col]), 4) for col in avg.index},
+            "per_sample": df.to_dict(orient="records"),
+            "details": detail_results,
+        }
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report_data, f, ensure_ascii=False, indent=2, default=str)
+        print(f"\n报告已保存：{report_path}")
+    else:
+        # 回退：手动打印 result
+        print(f"\nRAGAS 结果：{result}")
+
+    await Tortoise.close_connections()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RAG 评估脚本")
     parser.add_argument("--run_name", default=f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}", help="评估运行名称")
     parser.add_argument("--limit", type=int, default=0, help="限制评估样本数（0=全部）")
+    parser.add_argument("--ragas", action="store_true", help="使用 RAGAS 评估框架（替代自定义 LLM Judge）")
     args = parser.parse_args()
 
-    print("🔍 开始 RAG 评估...")
-    print(f"   运行名称：{args.run_name}")
-    print(f"   样本限制：{args.limit or '全部'}")
-    asyncio.run(run_evaluation(args.run_name, args.limit))
+    if args.ragas:
+        print("🔍 开始 RAGAS 评估...")
+        print(f"   运行名称：{args.run_name}")
+        print(f"   样本限制：{args.limit or '全部'}")
+        asyncio.run(run_ragas_evaluation(args.run_name, args.limit))
+    else:
+        print("🔍 开始 RAG 评估...")
+        print(f"   运行名称：{args.run_name}")
+        print(f"   样本限制：{args.limit or '全部'}")
+        asyncio.run(run_evaluation(args.run_name, args.limit))
     print("\n✅ 评估完成")
