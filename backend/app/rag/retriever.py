@@ -30,6 +30,7 @@ def _rrf_fusion(
 
     # 按 RRF 分数降序排列
     sorted_ids = sorted(scores, key=scores.get, reverse=True)
+    # sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     return [doc_map[did] for did in sorted_ids]
 
 
@@ -58,6 +59,51 @@ class HybridRetriever:
             ]
             self.bm25_retriever = BM25Retriever.from_documents(docs, k=settings.RAG_TOP_K * 2)
 
+    @staticmethod
+    def _is_simple_filter(filters: Dict) -> bool:
+        """判断是否为简单等值过滤（可下推到 Chroma 向量库）"""
+        return all(not isinstance(v, dict) for v in filters.values())
+
+    @staticmethod
+    def _matches_filter(metadata: Dict, filters: Dict) -> bool:
+        """判断文档 metadata 是否满足过滤条件
+        支持:
+          - 简单等值: {"court": "最高法院"}
+          - $contains: {"laws": {"$contains": "合同法"}}  (字符串子串 / 列表元素匹配)
+          - $in:      {"category": {"$in": ["劳动争议","合同纠纷"]}}
+          - $neq:     {"court": {"$neq": "某法院"}}
+        """
+        if not filters:
+            return True
+        for key, condition in filters.items():
+            value = metadata.get(key)
+            if isinstance(condition, dict):
+                for op, expected in condition.items():
+                    if op == "$contains":
+                        if value is None:
+                            return False
+                        if isinstance(value, list):
+                            if not any(str(expected) in str(item) for item in value):
+                                return False
+                        elif isinstance(value, str):
+                            if str(expected) not in value:
+                                return False
+                        else:
+                            if str(expected) not in str(value):
+                                return False
+                    elif op == "$in":
+                        if value not in expected:
+                            return False
+                    elif op == "$neq":
+                        if value == expected:
+                            return False
+                    else:
+                        return False
+            else:
+                if value != condition:
+                    return False
+        return True
+
     async def retrieve(self, query: str, top_k: int = 10, filters: Optional[Dict] = None) -> List[Dict]:
         """
         混合检索（RRF 融合）
@@ -68,8 +114,17 @@ class HybridRetriever:
         Returns:
             检索结果列表
         """
-        # 向量检索
-        vector_docs = await self.vector_retriever.ainvoke(query)
+        # 向量检索 — 简单等值过滤下推到向量库，复杂过滤走后置兜底
+        vector_docs = []
+        if filters and self._is_simple_filter(filters):
+            try:
+                vector_docs = self.vector_store.similarity_search(
+                    query, k=settings.RAG_TOP_K * 2, filter=filters
+                )
+            except Exception:
+                vector_docs = await self.vector_retriever.ainvoke(query)
+        else:
+            vector_docs = await self.vector_retriever.ainvoke(query)
 
         # BM25 检索
         bm25_docs = []
@@ -84,6 +139,10 @@ class HybridRetriever:
             )
         else:
             docs = vector_docs
+
+        # 后置过滤（兜底：对 BM25 结果和向量结果做统一过滤）
+        if filters:
+            docs = [doc for doc in docs if self._matches_filter(doc.metadata, filters)]
 
         return [self._doc_to_dict(doc) for doc in docs[:top_k]]
 

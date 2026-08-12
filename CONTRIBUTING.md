@@ -32,6 +32,7 @@
 - 遵循 PEP 8 编码规范
 - 使用类型注解（type hints）
 - 注释使用中文，与现有代码风格一致
+- async 函数中禁止同步阻塞调用，CPU 密集型操作使用 `asyncio.to_thread()`
 - 通过 `uv run pytest` 确保测试通过
 
 ### Vue / JavaScript
@@ -39,6 +40,18 @@
 - 使用 Vue 3 `<script setup>` 组合式 API
 - 组件文件名使用 PascalCase（如 `ChatMessage.vue`）
 - 使用 Pinia 管理全局状态
+
+## 评估
+
+提交涉及 RAG 检索或 QA 生成的变更时，建议运行评估：
+
+```bash
+# RAGAS 评估
+cd backend && uv run python scripts/evaluate.py --ragas
+
+# 自定义 LLM Judge
+cd backend && uv run python scripts/evaluate.py --judge
+```
 
 ## 环境设置
 

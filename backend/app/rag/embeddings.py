@@ -22,6 +22,7 @@ def _try_modelscope_download(model_name: str) -> str:
         return model_name
 
 def get_embeddings():
+    # 只读取不赋值可以不加 global，否则Python 会认为 _embeddings 是局部变量
     global _embeddings
     if _embeddings is None:
         model_name = settings.EMBEDDING_MODEL

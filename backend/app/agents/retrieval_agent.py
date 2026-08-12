@@ -8,7 +8,7 @@ from typing import TypedDict, Annotated, List, Dict
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.types import interrupt
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -99,15 +99,6 @@ def _extract_cases_from_messages(messages: list) -> list:
                 continue
     return []
 
-def _count_tool_calls(messages: list) -> int:
-    """统计 messages 中的 tool_calls 总数"""
-    count = 0
-    for msg in messages:
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            count += len(msg.tool_calls)
-    return count
-
-
 # 子图节点 
 async def agent_node(state: RetrievalState) -> dict:
     """ReAct Reason 步：LLM 分析 query，决定调用 search_cases 的参数"""
@@ -130,13 +121,6 @@ async def agent_node(state: RetrievalState) -> dict:
         "messages": [response],
         "tool_call_count": state.get("tool_call_count", 0) + len(response.tool_calls or []),
     }
-
-def should_continue(state: RetrievalState) -> str:
-    """LLM 返回了 tool_calls → 去执行工具；否则 → finish"""
-    last = state["messages"][-1]
-    if hasattr(last, "tool_calls") and last.tool_calls:
-        return "tools"
-    return "finish"
 
 def evaluate_node(state: RetrievalState) -> dict:
     """评估检索结果：数量够不够，决定 done / retry / interrupt"""
@@ -195,15 +179,9 @@ def build_retrieval_subgraph():
 
     # 边
     graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", should_continue, {
-        "tools": "tools",
-        "finish": "finish",
-    })
+    graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", "end": "finish"})
     graph.add_edge("tools", "evaluate")
-    graph.add_conditional_edges("evaluate", evaluate_route, {
-        "agent": "agent",    # retry → 回 agent 重新调用
-        "finish": "finish",  # done → 结束
-    })
+    graph.add_conditional_edges("evaluate", evaluate_route)
     graph.add_edge("finish", END)
 
     return graph.compile()

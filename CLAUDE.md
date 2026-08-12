@@ -2,13 +2,16 @@
 
 ## 项目简介
 
-LegalMind 是一个基于 LLM 与 RAG 技术的**智能法律咨询系统**。用户可以进行法律问答、案例检索、法律文书生成。
+LegalMind 是一个基于 LLM 与 RAG 技术的**智能法律咨询系统**。用户可以进行法律问答、案例检索、法律文书生成。系统融合 LangGraph 多 Agent 工作流、HITL 人机交互、ReAct 检索子图与混合检索技术。
 
 ## 技术栈
 
 - **后端**: Python >=3.14, FastAPI, LangChain, LangGraph, Tortoise ORM
 - **AI/LLM**: LangGraph Agent 工作流, OpenAI/DeepSeek/Anthropic LLM, BGE 中文 Embedding
-- **RAG**: Chroma 向量数据库, BM25 混合检索, Reranker 重排序
+- **RAG**: Chroma 向量数据库, BM25 混合检索, RRF 融合, BGE-Reranker-v2-m3 重排序
+- **工具**: LangChain Tool Calling（search_cases）, Pydantic 参数校验
+- **评估**: RAGAS 4 指标 + 自定义 LLM Judge
+- **可观测**: LangSmith 全链路追踪
 - **数据库**: PostgreSQL 16, Redis 7
 - **前端**: Vue 3 (Composition API), Vite 8, Tailwind CSS 4, Pinia, Vue Router
 - **容器**: Docker Compose (PostgreSQL + Redis)
@@ -22,7 +25,19 @@ legal_mind/
 │   ├── app/
 │   │   ├── api/              # FastAPI 路由（auth, chat, documents, cases）
 │   │   ├── agents/           # LangGraph Agent 工作流
-│   │   ├── rag/              # RAG 检索管线（vector, BM25, reranker）
+│   │   │   ├── workflow.py       # StateGraph 主图编排
+│   │   │   ├── intent_agent.py   # 意图识别（Structured Output）
+│   │   │   ├── retrieval_agent.py # ReAct 检索子图（4 节点 + HITL）
+│   │   │   ├── qa_agent.py       # 法律问答
+│   │   │   ├── document_agent.py # 文书生成
+│   │   │   └── human_loop.py     # HITL 意图确认节点
+│   │   ├── rag/              # RAG 检索管线
+│   │   │   ├── embeddings.py     # BGE 中文 Embedding
+│   │   │   ├── vector_store.py   # Chroma 向量存储
+│   │   │   ├── retriever.py      # 混合检索 + RRF 融合 + filters
+│   │   │   └── reranker.py       # BGE-Reranker-v2-m3
+│   │   ├── tools/           # LangChain Tool Calling
+│   │   │   └── search_tool.py    # search_cases Tool
 │   │   ├── llm/              # LLM 客户端、提示词模板
 │   │   ├── models/           # Tortoise ORM 数据模型
 │   │   ├── services/         # 业务逻辑层
@@ -31,18 +46,50 @@ legal_mind/
 │   │   ├── config.py         # Pydantic Settings 配置
 │   │   └── main.py           # FastAPI 入口
 │   ├── scripts/              # 工具脚本
+│   │   ├── build_index.py       # 构建向量索引
+│   │   ├── evaluate.py          # RAGAS + 自定义评估
+│   │   ├── supplement_laws.py   # 法条增量补充
+│   │   ├── crawl_legal_data.py  # 数据爬取
+│   │   ├── clean_data.py        # 数据清洗
+│   │   └── import_eval_data.py   # 评估数据导入
+│   ├── data/                 # 数据集
 │   ├── test/                 # 测试
 │   └── pyproject.toml        # 依赖管理
 ├── frontend/
 │   ├── src/
 │   │   ├── api/              # Axios API 客户端
 │   │   ├── components/       # 通用及业务组件
+│   │   │   └── chat/
+│   │   │       ├── ChatSidebar.vue
+│   │   │       ├── ChatMessage.vue
+│   │   │       ├── ChatInput.vue
+│   │   │       └── InterruptCard.vue  # HITL 交互卡片
 │   │   ├── views/            # 页面视图
-│   │   ├── stores/           # Pinia 状态管理
-│   │   └── router/           # Vue Router 路由
+│   │   ├── stores/          # Pinia 状态管理
+│   │   └── router/          # Vue Router 路由
 │   └── package.json
 └── README.md
 ```
+
+## 核心架构
+
+### Agent 工作流
+
+```
+START → intent_recognition → check_intent(HITL) → router
+  ├── qa: retrieval_subgraph → qa_generation → final_output
+  ├── search: retrieval_subgraph → final_output
+  └── document: document_generation → final_output
+→ END
+```
+
+### ReAct 检索子图
+
+```
+START → agent → (有 tool_calls → tools → evaluate → retry|done) | (无 → finish) → END
+```
+
+- evaluate 节点：≥3 条→done，<3 且 retry<3→自动重试，retry 耗尽→HITL interrupt
 
 ## 启动方式
 
@@ -65,6 +112,7 @@ pnpm dev
 - API 路由 tags 使用中文（如 `tags=["认证"]`）
 - Python 使用 `uv` 管理依赖，配置文件为 `pyproject.toml`
 - 前端使用 Vue 3 `<script setup>` 组合式 API
+- 提交规范遵循 Conventional Commits（见 CONTRIBUTING.md）
 
 ## 常用命令
 
@@ -80,4 +128,13 @@ cd frontend && pnpm lint
 
 # 构建向量索引
 cd backend && uv run python scripts/build_index.py
+
+# RAGAS 评估
+cd backend && uv run python scripts/evaluate.py --ragas
+
+# 自定义 LLM Judge 评估
+cd backend && uv run python scripts/evaluate.py --judge
+
+# 法条增量补充
+cd backend && uv run python scripts/supplement_laws.py
 ```

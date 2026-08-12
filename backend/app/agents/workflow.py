@@ -109,6 +109,7 @@ class LegalMindWorkflow:
     async def _output_node(self, state: AgentState) -> dict:
         if state.get("intent") == "search" and not state.get("response"):
             cases = state.get("retrieved_cases", [])
+            # 每层缩进 2 空格，输出带换行和缩进的美化格式
             text = json.dumps(cases, ensure_ascii=False, indent=2)
             return {
                 "messages": [AIMessage(content=text)],
