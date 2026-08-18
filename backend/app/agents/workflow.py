@@ -10,7 +10,7 @@ from app.agents.intent_agent import IntentAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.document_agent import DocumentAgent
 from app.agents.retrieval_agent import retrieval_subgraph
-from app.agents.human_loop import check_intent
+from app.agents.human_loop import check_intent, info_gathering
 from app.llm.checkpoint import get_checkpointer
 
 
@@ -20,6 +20,8 @@ class AgentState(TypedDict):
     intent: str                   # 识别的意图
     intent_confidence: float      # 意图置信度（0-1）
     user_supplement: str          # 用户补充信息（HITL resume 后）
+    clarify_round: int            # 信息收集轮次（自循环节点用）
+    info_sufficient: bool          # 信息是否充分（True→放行，False→自循环追问）
     context: list                 # 上下文信息
     retrieved_cases: list         # 检索到的案例
     document_type: str            # 文书类型
@@ -42,20 +44,25 @@ class LegalMindWorkflow:
 
         #  添加节点 
         workflow.add_node("intent_recognition", self._intent_node)
-        workflow.add_node("check_intent", check_intent)          # HITL #1
-        workflow.add_node("retrieval_agent", retrieval_subgraph)  # ReAct 检索子图（内含 HITL #2）
+        workflow.add_node("check_intent", check_intent)          # HITL #1：意图确认（一次性）
+        workflow.add_node("info_gathering", info_gathering)     # HITL #2：多轮信息收集（自循环）
+        workflow.add_node("retrieval_agent", retrieval_subgraph)  # ReAct 检索子图（内含 HITL #3）
         workflow.add_node("qa_generation", self._qa_node)
         workflow.add_node("document_generation", self._document_node)
         workflow.add_node("final_output", self._output_node)
 
         # 添加图结构 
-        # intent_recognition → check_intent → (条件路由)
+        # intent_recognition → check_intent → info_gathering（自循环）→ 路由
         workflow.set_entry_point("intent_recognition")
         workflow.add_edge("intent_recognition", "check_intent")
-        workflow.add_conditional_edges("check_intent", self._router_by_intent, {
+        workflow.add_edge("check_intent", "info_gathering")
+
+        # info_gathering 自循环：info_sufficient=False → 回自己；True → 按意图路由
+        workflow.add_conditional_edges("info_gathering", self._route_after_info, {
             "qa": "retrieval_agent",
             "search": "retrieval_agent",
             "document": "document_generation",
+            "loop": "info_gathering",   # 自循环：信息不足时回到自己
         })
 
         # retrieval_agent（ReAct 子图）→ (条件路由)
@@ -119,7 +126,11 @@ class LegalMindWorkflow:
         return {}
 
     #  路由函数 
-    def _router_by_intent(self, state: AgentState) -> str:
+    def _route_after_info(self, state: AgentState) -> str:
+        """info_gathering 自循环路由：信息不足→回自己，充分→按意图路由"""
+        if not state.get("info_sufficient"):
+            return "loop"  # 自循环
+        # 信息充分，按意图路由
         intent = state["intent"]
         if intent == "document":
             return "document"

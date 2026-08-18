@@ -106,6 +106,15 @@ cd frontend
 pnpm dev
 ```
 
+## 文档管理规则（必须遵守）
+
+详见 `.claude/project_rules.md`（工作区根目录）。核心：项目有两份核心文档，用途严格区分：
+
+- **`UPGRADE_PLAN.md`**（改造计划）：待做功能规划 + 概念讲解 + 参考资料；完成的功能项标记 ✅ 并保留原文
+- **`优化项目.md`**（执行日志）：已完成功能/Bug 修复（附文件引用与根因）+【待做】条目，极简风格
+
+完成一个功能或修复 Bug 时，两份文档都要按 `project_rules.md` 中的同步规则表更新；同时检查 README.md、CHANGELOG.md 等文档是否需要同步。
+
 ## 代码规范
 
 - 采用中文注释，与现有代码风格一致
@@ -113,6 +122,14 @@ pnpm dev
 - Python 使用 `uv` 管理依赖，配置文件为 `pyproject.toml`
 - 前端使用 Vue 3 `<script setup>` 组合式 API
 - 提交规范遵循 Conventional Commits（见 CONTRIBUTING.md）
+
+### LangGraph/LangChain 代码规范
+
+- async 函数中禁止同步阻塞调用，CPU 密集型操作用 `asyncio.to_thread` 包装
+- 循环节点必须有退出条件（如 `MAX_ROUNDS` 常量），防止无限循环
+- interrupt 数据结构必须兼容前端 `InterruptCard.vue` 的 `{"type": ..., "question": ...}` 格式
+- 子图状态用 `TypedDict` 定义，内部字段不暴露给主图
+- 条件边路径函数返回值应为节点名本身，避免冗余 path_map 映射
 
 ## 常用命令
 

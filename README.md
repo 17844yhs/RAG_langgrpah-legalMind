@@ -34,7 +34,7 @@ claude
 
 ### 技术亮点
 
-- **🤝 Human-in-the-Loop 人机交互** — 两个 HITL 检查点：意图确认（置信度 < 0.8 触发澄清）和检索质量评估（结果不足时引导用户补充信息），基于 LangGraph `interrupt` API 实现
+- **🤝 Human-in-the-Loop 人机交互** — 三个 HITL 检查点：意图确认（置信度 < 0.8 触发澄清）、多轮信息收集（LLM 判断信息不足时自循环追问，最多 3 轮）和检索质量评估（结果不足时引导用户补充信息），基于 LangGraph `interrupt` API 实现
 - **🛠️ Tool Calling + 参数校验** — `search_cases` Tool 使用 Pydantic Schema 校验（年份范围、案由枚举），LLM 自动提取结构化参数，4 层错误处理架构
 - **🧩 ReAct 检索子图** — 自行封装的 4 节点子图（agent → tools → evaluate → finish），支持自动重试（3 轮）和 HITL 介入
 - **📊 混合检索管线** — BM25 + 向量检索 + RRF（Reciprocal Rank Fusion）融合 + BGE-Reranker-v2-m3 精排，三级检索管线

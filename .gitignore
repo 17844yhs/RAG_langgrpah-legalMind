@@ -38,7 +38,7 @@ dist-ssr/
 Thumbs.db
 
 # --- Project-specific ---
-# Vector store local data
+# Vector store local data (matches at any level, e.g. backend/data/chroma/)
 data/chroma/
 # Local embedding models (large files, entire directory)
 backend/models/
@@ -48,6 +48,11 @@ backend/.python-version
 logs/
 *.log
 
+# --- Local databases ---
+*.sqlite3
+*.sqlite3-journal
+*.db
+
 # --- Claude Code ---
-.claude/
+.claude/settings.local.json
 plans/

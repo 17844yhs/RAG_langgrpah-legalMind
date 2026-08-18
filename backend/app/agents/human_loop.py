@@ -1,6 +1,13 @@
 """Human-in-the-Loop 管理 — 管理所有需要人工介入的节点"""
 from langgraph.types import interrupt
+from langchain_core.messages import HumanMessage, AIMessage
+from pydantic import BaseModel
 
+from app.llm.model_client import get_llm
+from app.llm.prompts import INFO_GATHERING_PROMPT
+
+
+# ── HITL #1：意图确认（一次性）──
 
 async def check_intent(state):
     """意图置信度不足时，生成澄清问题并等待用户确认。
@@ -34,6 +41,70 @@ async def check_intent(state):
     return {
         "user_supplement": user_response,
         "query": state["query"] + "\n" + user_response,
+    }
+
+
+# ── HITL #2：多轮信息收集（自循环）──
+
+class InfoCheckResult(BaseModel):
+    """LLM 信息充分性判断结果"""
+    sufficient: bool   # 信息是否充分
+    question: str      # 不充分时的追问问题（充分时为空）
+
+
+MAX_CLARIFY_ROUNDS = 3  # 最多追问 3 轮，防止死循环
+
+
+async def info_gathering(state):
+    """多轮信息收集节点 — LLM 判断信息充分性，不足则追问（自循环 HITL）
+
+    每轮流程：
+    1. LLM 评估当前对话历史是否信息充分
+    2. 充分 → 放行（info_sufficient=True）
+    3. 不足 → 生成针对性追问 → interrupt 等待用户回答
+    4. resume 后，追问 + 用户回答追加到 messages，轮次 +1
+    5. 条件边检测 info_sufficient：False → 自循环回本节点；True → 路由到下游
+    """
+    round = state.get("clarify_round", 0)
+
+    # 超过最大轮次，强制放行（防死循环）
+    if round >= MAX_CLARIFY_ROUNDS:
+        return {"info_sufficient": True}
+
+    # LLM 判断信息充分性 + 生成追问（一次调用完成两件事）
+    llm = get_llm().with_structured_output(InfoCheckResult, method="function_calling")
+
+    # 构建对话历史文本（含追问和用户回答，保持完整上下文）
+    history = "\n".join([
+        f"{'用户' if isinstance(m, HumanMessage) else '助手'}: {m.content}"
+        for m in state.get("messages", [])
+    ])
+
+    result = await llm.ainvoke(INFO_GATHERING_PROMPT.format(
+        intent=state.get("intent", "qa"),
+        query=state.get("query", ""),
+        history=history,
+    ))
+
+    # 信息充分 → 放行
+    if result.sufficient:
+        return {"info_sufficient": True}
+
+    # 不充分 → interrupt 追问（前端收到后渲染 InterruptCard）
+    user_answer = interrupt({
+        "type": "clarify_info",
+        "question": result.question,
+        "round": round + 1,
+    })
+
+    # resume 后，追问 + 用户回答都追加到 messages（下轮 LLM 能看到完整 Q&A 上下文）
+    return {
+        "messages": [
+            AIMessage(content=result.question),   # 助手的追问
+            HumanMessage(content=user_answer),    # 用户的回答
+        ],
+        "clarify_round": round + 1,
+        "info_sufficient": False,
     }
 
 

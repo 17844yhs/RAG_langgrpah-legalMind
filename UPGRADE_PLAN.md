@@ -1,3 +1,4 @@
+
 # LegalMind 项目改造计划
 
 > 目标：把一个"调 API 的 demo"改造成面试能打的项目
@@ -255,24 +256,54 @@ def evaluate_rag(queries, ground_truths, answers, contexts):
 
 ---
 
-### 2.5 多轮澄清对话 + 上下文管理（半天）
+### 2.5 多轮澄清对话 + 上下文管理 ✅
 
 **业务背景**：用户第一句话说"我有个问题"，第二句"公司欠我工资"，第三句"三个月了"。Agent 需要逐步澄清：确认是劳动争议→确认欠薪金额和时间→确认是否签劳动合同。同时管理多轮上下文——Checkpoint 持久化对话状态。
 
-**做法**：
+**已实现**：
 
 ```python
-# 利用已有的 LangGraph checkpoint 机制
-# backend/app/agents/workflow.py
-from langgraph.checkpoint.memory import MemorySaver
+# backend/app/agents/human_loop.py
+# info_gathering 节点：LLM 判断信息充分性 + 自循环追问
 
-checkpointer = MemorySaver()
-graph = workflow.compile(checkpointer=checkpointer)
+class InfoCheckResult(BaseModel):
+    sufficient: bool   # 信息是否充分
+    question: str      # 不充分时的追问问题
 
-# 每次对话通过 thread_id 恢复状态
-config = {"configurable": {"thread_id": session_id}}
-result = await graph.ainvoke(initial_state, config)
+async def info_gathering(state):
+    round = state.get("clarify_round", 0)
+    if round >= MAX_CLARIFY_ROUNDS:  # 防死循环
+        return {"info_sufficient": True}
+
+    # LLM 一次调用完成：判断充分性 + 生成追问
+    llm = get_llm().with_structured_output(InfoCheckResult, method="function_calling")
+    result = await llm.ainvoke(INFO_GATHERING_PROMPT.format(...))
+
+    if result.sufficient:
+        return {"info_sufficient": True}  # 放行
+
+    # 不充分 → interrupt 追问 → resume 后追加 Q&A 到 messages → 自循环
+    user_answer = interrupt({"type": "clarify_info", "question": result.question})
+    return {
+        "messages": [AIMessage(result.question), HumanMessage(user_answer)],
+        "clarify_round": round + 1,
+        "info_sufficient": False,  # 条件边检测 False → 自循环回自己
+    }
 ```
+
+图结构（`workflow.py`）：
+
+```
+intent_recognition → check_intent → info_gathering ──→ router → ...
+                                      ↑_____loop_____|
+```
+
+**关键设计**：
+- LLM 一次调用完成两件事（充分性判断 + 追问生成），减少 API 调用
+- 追问 + 用户回答都追加到 messages，下轮 LLM 看到完整 Q&A 上下文
+- `MAX_CLARIFY_ROUNDS=3` 防死循环守卫
+- 前端 InterruptCard 复用（interrupt 数据结构兼容），无需改动
+- Checkpoint 持久化对话状态（`thread_id` 恢复）
 
 **量化指标**：
 
@@ -823,6 +854,7 @@ def _sse(data: dict) -> str:
 **通用概念**：在 async 函数中调用 CPU 密集型同步代码时，必须用 `asyncio.to_thread()` 把它丢到线程池，避免阻塞事件循环。这是 Python async 编程的核心原则——**async 函数里不能有同步阻塞操作**，否则等于退化成串行。
 
 **修法**：
+
 ```python
 import asyncio
 
@@ -851,6 +883,7 @@ scores = await asyncio.to_thread(self._model.predict, pairs)
 **通用概念**：当多个 I/O 操作互不依赖时，用 `asyncio.gather()` 并行执行，总耗时 = max(各操作耗时) 而非 sum。这是异步编程最基础的性能优化手段。
 
 **修法**：
+
 ```python
 vector_docs, bm25_docs = await asyncio.gather(
     self.vector_retriever.ainvoke(query),
@@ -875,6 +908,7 @@ vector_docs, bm25_docs = await asyncio.gather(
 **通用概念**：LangGraph 的 reducer 机制决定了状态如何累积。`add_messages` 是追加语义，但**没有自动裁剪**。LangGraph 提供 `RemoveMessage` 来主动删除旧消息，或者可以用自定义 reducer 在追加时自动保留最近 N 条。
 
 **通用模式 — 自定义消息裁剪 reducer**：
+
 ```python
 from langchain_core.messages import RemoveMessage
 
@@ -897,6 +931,7 @@ def some_node(state):
 **问题**：当前 `stream_mode="messages"` 只能捕获 LLM 的逐 token 流，无法告诉前端"正在识别意图"→"正在检索"→"正在重排"等阶段。
 
 **通用概念**：LangGraph 的 `astream_events(version="v2")` 是比 `astream` 更细粒度的事件流。它能捕获：
+
 - `on_chain_start/end` — 节点开始/结束（知道当前在哪个节点）
 - `on_tool_start/end` — 工具调用开始/结束（知道在检索）
 - `on_chat_model_stream` — LLM 逐 token 流（打字机效果）
@@ -919,10 +954,12 @@ async for event in graph.astream_events(input, config=config, version="v2"):
 **问题**：当前图是纯串行的（intent → retrieval → qa → output）。合同审查等场景需要多维度并行分析（劳动法、知识产权、合同法），串行调用耗时 = 各专家耗时之和。
 
 **通用概念**：LangGraph 的 `Send` API 允许在一个条件边中**动态生成 N 个并行分支**。核心模式是 Map-Reduce：
+
 - **Map**：Supervisor 节点返回 `[Send("expert", data1), Send("expert", data2), ...]`，LangGraph 自动并行执行
 - **Reduce**：用 `Annotated[list, operator.add]` reducer 自动汇聚所有并行分支的结果
 
 **通用模式**：
+
 ```python
 from langgraph.types import Send
 import operator
@@ -957,6 +994,7 @@ graph.add_edge("expert", "synthesize")
 **通用概念**：LangGraph 的子图不是函数调用，而是**独立的图编译实例**。子图有自己的状态 schema、自己的 checkpointer（可选）、自己的中断点。主图和子图之间的数据流动是通过**共享状态字段**完成的。
 
 **最佳实践**：
+
 - 子图内部状态（如 `tool_call_count`、`reformulated_query`）不需要暴露给主图
 - 子图返回给主图的字段（如 `retrieved_cases`、`status`）要在两个 State 中都定义
 - 子图内的 `interrupt()` 会向上冒泡，主图的 checkpointer 能正确暂停和恢复
@@ -972,16 +1010,19 @@ graph.add_edge("expert", "synthesize")
 #### 8.3.1 LCEL（LangChain Expression Language）统一管道 【概念统一】
 
 **当前状态**：项目中 LCEL 用法不统一：
+
 - `document_agent.py` 用了 `prompt | self.llm | StrOutputParser()` — 标准 LCEL
 - `qa_agent.py` 手动调用 `self.llm.ainvoke(messages)` / `self.llm.astream(messages)` — 未用 LCEL
 - `intent_agent.py` 用 `self.llm.with_structured_output(...)` — LCEL 的 Runnable 组合
 
 **通用概念**：LCEL 的核心思想是**一切皆 Runnable**。`prompt | llm | parser` 就是一个 Runnable 管道，支持 `.invoke()` / `.ainvoke()` / `.stream()` / `.astream()` / `.batch()`。用 LCEL 的好处：
+
 1. 自动获得流式、批处理、异步能力
 2. 用 `RunnablePassthrough` 注入上下文，无需手动拼消息
 3. 中间步骤可观测（LangSmith 自动 trace 每个 Runnable）
 
 **通用模式**：
+
 ```python
 from langchain_core.runnables import RunnablePassthrough
 
@@ -1014,6 +1055,7 @@ robust_chain = structured_chain.with_fallbacks([free_text_chain])
 #### 8.3.3 with_structured_output 的 method 选择 【已实践，补充理解】
 
 **通用概念**：`with_structured_output(schema, method=...)` 有两种模式：
+
 - `method="json_schema"`：模型直接输出 JSON，通过 response_format 约束。**部分模型不支持**（如 DeepSeek）。
 - `method="function_calling"`：通过 function calling 机制约束输出。**兼容性更好**，几乎所有支持 tool calling 的模型都可用。
 
@@ -1022,12 +1064,14 @@ robust_chain = structured_chain.with_fallbacks([free_text_chain])
 #### 8.3.4 BaseCallbackHandler 生命周期 【可选增强】
 
 **通用概念**：LangChain 的回调系统贯穿整个 Runnable 执行生命周期：
+
 - `on_llm_start` / `on_llm_end` / `on_llm_error` — LLM 调用级
 - `on_chain_start` / `on_chain_end` — Chain/节点级
 - `on_tool_start` / `on_tool_end` — Tool 调用级
 - `on_text` — 中间文本产出
 
 **通用用途**：
+
 1. **Token 成本追踪**：在 `on_llm_end` 提取 `token_usage`
 2. **自定义日志**：在 `on_chain_start` 记录节点入口
 3. **缓存控制**：在 `on_llm_start` 检查缓存命中
@@ -1046,6 +1090,7 @@ robust_chain = structured_chain.with_fallbacks([free_text_chain])
 **通用概念**：Self-Reflection 是 Agent 的核心模式之一——**让 LLM 评估自己的输出**。在生成节点之后加一个评估节点，用 LLM 判断答案质量（是否基于检索内容、是否引用了法条），低质量则触发重试。
 
 **通用模式**：
+
 ```python
 def quality_gate(state) -> dict:
     """LLM 自评：答案是否忠实于检索内容"""
@@ -1071,6 +1116,7 @@ graph.add_conditional_edges("quality_gate", lambda s: "qa_generation" if s["stat
 **可优化点**：当前 retry 只是回到 `agent` 节点重新执行，但 `agent` 的 system prompt 没有告诉 LLM "上次检索结果不足，需要调整策略"。LLM 可能用同样的参数再调一次，得到同样的结果。
 
 **通用模式**：retry 时应该在消息中注入**反思信息**，让 LLM 知道上次为什么不成功：
+
 ```python
 def evaluate_node(state):
     if count < 3 and retry < 3:
@@ -1095,20 +1141,20 @@ def evaluate_node(state):
 
 ### 8.5 优化优先级总览
 
-| 优先级 | 优化项 | 类型 | 预估 | 面试价值 |
-|--------|--------|------|------|----------|
-| P0 | Reranker/BM25 异步化 | 性能 | 30min | ⭐⭐ 展示 async 理解 |
-| P0 | 消息裁剪（防 context 爆炸） | LangGraph | 1h | ⭐⭐⭐ 展示状态管理 |
-| P1 | 向量+BM25 并行检索 | 性能 | 30min | ⭐⭐ async.gather |
-| P1 | Self-Reflection 质量门控 | Agent | 2h | ⭐⭐⭐⭐ 高级 Agent 模式 |
-| P1 | Send API 并行专家分发 | LangGraph | 3h | ⭐⭐⭐⭐⭐ 区分度最高 |
-| P2 | astream_events 分阶段进度 | LangGraph | 2h | ⭐⭐⭐ 产品体验 |
-| P2 | with_fallbacks 容灾 | LangChain | 1h | ⭐⭐ 工程成熟度 |
-| P2 | QA Agent LCEL 重构 | LangChain | 1h | ⭐⭐ 代码统一性 |
-| P3 | HybridRetriever 单例 | 性能 | 30min | ⭐ |
-| P3 | Callbacks Token 追踪 | LangChain | 2h | ⭐⭐ 成本意识 |
-| P3 | 文书生成流式化 | 性能 | 30min | ⭐ |
-| P3 | retry 注入反思信息 | Agent | 30min | ⭐⭐⭐ Reflection 模式 |
+| 优先级 | 优化项                      | 类型      | 预估  | 面试价值                 |
+| ------ | --------------------------- | --------- | ----- | ------------------------ |
+| P0     | Reranker/BM25 异步化        | 性能      | 30min | ⭐⭐ 展示 async 理解     |
+| P0     | 消息裁剪（防 context 爆炸） | LangGraph | 1h    | ⭐⭐⭐ 展示状态管理      |
+| P1     | 向量+BM25 并行检索          | 性能      | 30min | ⭐⭐ async.gather        |
+| P1     | Self-Reflection 质量门控    | Agent     | 2h    | ⭐⭐⭐⭐ 高级 Agent 模式 |
+| P1     | Send API 并行专家分发       | LangGraph | 3h    | ⭐⭐⭐⭐⭐ 区分度最高    |
+| P2     | astream_events 分阶段进度   | LangGraph | 2h    | ⭐⭐⭐ 产品体验          |
+| P2     | with_fallbacks 容灾         | LangChain | 1h    | ⭐⭐ 工程成熟度          |
+| P2     | QA Agent LCEL 重构          | LangChain | 1h    | ⭐⭐ 代码统一性          |
+| P3     | HybridRetriever 单例        | 性能      | 30min | ⭐                       |
+| P3     | Callbacks Token 追踪        | LangChain | 2h    | ⭐⭐ 成本意识            |
+| P3     | 文书生成流式化              | 性能      | 30min | ⭐                       |
+| P3     | retry 注入反思信息          | Agent     | 30min | ⭐⭐⭐ Reflection 模式   |
 
 ---
 
@@ -1123,11 +1169,11 @@ def evaluate_node(state):
 
 **通用概念**：L1 内存 → L2 Redis → L3 数据库，三级缓存逐层降级。缓存是降本最直接的手段，尤其在用户查询存在热点模式的场景下效果显著。
 
-| 缓存层 | 内容 | 命中效果 | 适用场景 |
-|--------|------|---------|---------|
-| Embedding 缓存 | query → embedding 向量 | 省去 embedding 计算耗时 | 重复/相似查询多的场景 |
-| 语义缓存 | 相似问题的完整回答 | **完全跳过 RAG 流程**，秒级→毫秒级 | 高频 FAQ、客服场景 |
-| 检索结果缓存 | query → 文档 ID 列表 | 省去向量检索耗时 | 短期内有重复查询 |
+| 缓存层         | 内容                    | 命中效果                                  | 适用场景              |
+| -------------- | ----------------------- | ----------------------------------------- | --------------------- |
+| Embedding 缓存 | query → embedding 向量 | 省去 embedding 计算耗时                   | 重复/相似查询多的场景 |
+| 语义缓存       | 相似问题的完整回答      | **完全跳过 RAG 流程**，秒级→毫秒级 | 高频 FAQ、客服场景    |
+| 检索结果缓存   | query → 文档 ID 列表   | 省去向量检索耗时                          | 短期内有重复查询      |
 
 **数据支撑**：缓存可将 LLM API 调用成本降低最高 **90%**，命中时响应时间从秒级降至毫秒级。
 
@@ -1145,6 +1191,7 @@ def evaluate_node(state):
 - **熔断三态**：CLOSED（正常通行）→ OPEN（熔断，直接拒绝所有请求）→ HALF-OPEN（放行一个探测请求，成功则恢复 CLOSED）
 
 **本项目应用**：
+
 - LLM API 限流：Token Bucket（每秒 N 个令牌），防止打爆 API 额度
 - 向量库限流：连接池大小限制并发查询数
 - 熔断：LLM API 连续超时 5 次后熔断 30s，期间直接返回降级响应
@@ -1160,6 +1207,7 @@ def evaluate_node(state):
 **通用概念**：Producer-Consumer 模式。耗时操作走队列不阻塞主流程，生产者只需把任务丢进队列就返回，消费者后台慢慢处理。
 
 **本项目应用**：
+
 - 文档上传/索引构建 → 异步队列，立即返回"正在处理"
 - 批量评估任务 → 队列调度，避免阻塞 API
 - 长时间法律文书生成 → 队列 + 轮询/SSE 推送结果
@@ -1175,6 +1223,7 @@ def evaluate_node(state):
 **通用概念**：连接复用（避免频繁建连断连）、预热（启动时创建最小连接数）、健康检查（使用前 ping）。
 
 **本项目应用**：
+
 - PostgreSQL：`pool_size=20, max_overflow=10, pool_pre_ping=True, pool_recycle=1800`
 - ChromaDB：客户端单例复用
 - Redis：`BlockingConnectionPool(max_connections=20)`
@@ -1193,6 +1242,7 @@ def evaluate_node(state):
 - **健康检查**：Liveness（进程是否活着）vs Readiness（是否准备好服务请求）
 
 **本项目应用**：
+
 - FastAPI `lifespan` 实现 graceful shutdown，确保流式响应完整推送
 - `/health`（Liveness）：进程活着就返回 200
 - `/ready`（Readiness）：检查 PostgreSQL、ChromaDB、LLM API 连通性，任一不可用返回 503
@@ -1429,41 +1479,518 @@ def evaluate_node(state):
 
 ### 13.5 安全加固
 
-| 项目 | 当前问题 | 修复方案 |
-|------|---------|---------|
-| JWT 密钥 | 硬编码 | 用 `secrets.token_urlsafe(32)` 生成强随机密钥 |
-| 密码哈希 | 自定义 PBKDF2 | 升级为 `bcrypt`（行业标准） |
-| API 限流 | 无 | Token Bucket 限流防 DDoS |
-| CORS | 宽松配置 | 白名单指定域名 |
-| SQL 注入 | 已有防护 | SQLAlchemy 参数化查询（保持） |
+| 项目     | 当前问题      | 修复方案                                       |
+| -------- | ------------- | ---------------------------------------------- |
+| JWT 密钥 | 硬编码        | 用`secrets.token_urlsafe(32)` 生成强随机密钥 |
+| 密码哈希 | 自定义 PBKDF2 | 升级为`bcrypt`（行业标准）                   |
+| API 限流 | 无            | Token Bucket 限流防 DDoS                       |
+| CORS     | 宽松配置      | 白名单指定域名                                 |
+| SQL 注入 | 已有防护      | SQLAlchemy 参数化查询（保持）                  |
 
 **通用价值**：安全是生产系统的底线。密钥管理、最小权限原则、纵深防御——这些不只是 Web 安全的知识，是系统设计的思维方式。
 
 ---
 
+## 十四、LangGraph 1.0+ 新特性集成
+
+> 基于 LangGraph v1.0.3（2025.11）+ Deep Agents v0.6（2026.05）+ LangChain 2026 最新 API
+> 参考来源：[LangGraph Production Guide](https://github.com/CodeHalwell/AgentGuides/blob/f5e40914cb65c7d589a64e99baabb4d5edcb84d2/LangGraph_Guide/python/langgraph_production_guide.md)、[Deep Agents v0.6](https://www.langchain.com/blog/deep-agents-0-6)、[From Token Streams to Agent Streams](https://www.langchain.com/blog/token-streams-to-agent-streams)
+
+### 14.1 Pre/Post Model Hooks（模型护栏）【P1】
+
+**业务背景**：法律场景下，用户可能输入敏感内容（如"帮我写一份虚假合同骗银行"），或 LLM 可能输出不当建议。需要前置/后置拦截。
+
+**通用概念**：拦截器链（Interceptor Chain）— 请求前拦截 + 响应后拦截，类似 Express middleware 的 `pre`/`post` 钩子。
+
+**做法**：LangGraph 1.0.3 的 Pre/Post Model Hooks，在 LLM 调用前后自动执行 guardrail 逻辑。
+
+```python
+# Pre-hook: 拦截敏感输入
+async def pre_model_hook(state):
+    if contains_sensitive_content(state["messages"][-1].content):
+        return {"messages": [HumanMessage("抱歉，无法处理此类请求。")]}
+    return {}
+
+# Post-hook: 过滤不当输出
+async def post_model_hook(state):
+    last_msg = state["messages"][-1]
+    if not validate_legal_advice(last_msg.content):
+        return {"messages": [AIMessage("（内容已被安全过滤）")]}
+    return {}
+```
+
+**通用价值**：任何系统都需要前置/后置校验。HTTP middleware、数据库 trigger、CI/CD pipeline 都是同一模式。
+
+---
+
+### 14.2 Node Caching（节点缓存）【P2】
+
+**业务背景**：意图识别节点对同一句话的结果是确定的，重复调用浪费 LLM API。
+
+**通用概念**：记忆化（Memoization）— 相同输入直接返回缓存结果，跳过计算。
+
+**做法**：LangGraph 1.0.3 支持节点级缓存配置，用 `@cache` 装饰器或 `cache_key` 参数标记节点。
+
+**通用价值**：动态规划的记忆化搜索、HTTP 的 ETag、CPU 的 L1 缓存——所有"相同输入→相同输出"的场景都适用。
+
+---
+
+### 14.3 Cross-Thread Memory（跨会话记忆）【P2】
+
+**业务背景**：用户上周问过"公司欠我工资怎么维权"，这周问"劳动仲裁时效多久"，Agent 应该记住用户是劳动争议案件。
+
+**通用概念**：长期记忆 vs 短期记忆 — 对话上下文是短期记忆（thread 内），用户画像/偏好是长期记忆（跨 thread）。
+
+**做法**：LangGraph 的 `Store` API（`InMemoryStore` 开发 / `PostgresStore` 生产），按 `user_id` 存储长期记忆。
+
+```python
+from langgraph.store.memory import InMemoryStore
+store = InMemoryStore()
+# 写入：store.put(("user", user_id), "profile", {"case_type": "劳动争议"})
+# 读取：store.get(("user", user_id), "profile")
+```
+
+**通用价值**：Redis 的 namespace 隔离、数据库的 user_id 分区——长期记忆的 key 设计是通用问题。
+
+---
+
+### 14.4 Delta Channels（增量通道）【P2】
+
+**业务背景**：多轮对话中 messages 列表越来越长，每轮 checkpoint 都全量存储所有消息，存储成本随轮次平方增长。
+
+**通用概念**：增量存储 vs 全量存储 — 只存变化部分（delta），而非每次全量快照。Git 的 commit diff 就是增量存储。
+
+**做法**：Deep Agents v0.6 的 `DeltaChannel`，checkpoint 只存增量变化，长对话存储成本降 100x。
+
+**通用价值**：数据库 WAL、CRDT 增量同步、视频编码的 P/B 帧——增量存储是空间优化的通用手段。
+
+---
+
+### 14.5 Typed Streaming Events（类型化流式事件）【P1】
+
+**业务背景**：当前 `stream_mode="messages"` 只能拿到 token 流。前端无法知道"现在正在检索"还是"正在生成回答"。
+
+**通用概念**：观察者模式 + 类型化事件 — 不是发一串无类型文本，而是发带类型的结构化事件，消费者只订阅自己关心的类型。
+
+**做法**：LangChain v0.6 的 typed event projections，订阅 messages / tool_calls / state / subagents / custom channels。
+
+```python
+async for event in graph.astream_events(input, version="v2"):
+    if event["event"] == "on_tool_start":
+        yield f"[正在检索案例...]"
+    elif event["event"] == "on_tool_end":
+        yield f"[找到 {count} 条案例]"
+    elif event["event"] == "on_chat_model_stream":
+        yield event["data"]["chunk"].content
+```
+
+**通用价值**：Event Sourcing、CQRS、DOM 事件监听——类型化事件是解耦生产者和消费者的标准手段。
+
+---
+
+### 14.6 Programmatic Tool Calling（编程式工具调用）【P3】
+
+**业务背景**：当前 ReAct 子图每调一次工具都要 LLM 介入决策。如果要连续查 3 个案由的案例，需要 3 轮 LLM 调用，浪费 token 和延迟。
+
+**通用概念**：批量化 vs 逐次化 — 不要让协调者（LLM）介入每次操作，而是让执行者（代码）批量处理。
+
+**做法**：Deep Agents v0.6 的 Code Interpreter，LLM 写代码编排工具调用，中间步骤不回传 LLM。
+
+**通用价值**：批处理 vs 单条处理、ORM 的批量插入 vs 逐条插入——减少协调开销是性能优化通则。
+
+---
+
+### 14.7 interrupt_before / interrupt_after（声明式 HITL）【P3】
+
+**业务背景**：当前 HITL 用 `interrupt()` 手动写在节点内部。如果要在多个节点加 HITL，代码侵入性强。
+
+**通用概念**：声明式 vs 命令式 — 不在代码里写"什么时候暂停"，而是在配置里声明"在哪个节点前后暂停"。
+
+**做法**：LangGraph 编译时指定 `interrupt_before=["node_name"]`，图自动在该节点前暂停。
+
+```python
+graph = builder.compile(
+    checkpointer=checkpointer,
+    interrupt_before=["qa_generation"],  # QA 生成前等待人工确认
+)
+```
+
+**通用价值**：AOP（面向切面编程）、数据库的 `BEFORE INSERT` trigger——声明式拦截是解耦业务逻辑和横切关注点的通用手段。
+
+---
+
+### 14.8 Swarm / Hierarchical 多 Agent 拓扑【P3】
+
+**业务背景**：当前是单主图 + 检索子图的简单结构。如果扩展到劳动、婚姻、刑事等多个专业领域，需要更灵活的多 Agent 协作模式。
+
+**通用概念**：
+- **Swarm**：Agent 之间直接交接，无中心调度。灵活但难追踪。
+- **Hierarchical**：父图委托子任务给子图，子图独立完成后汇报。模块化、可复用。
+
+**做法**：LangGraph 的子图组合天然支持 Hierarchical 模式（当前已用），Swarm 模式可用 `Command(goto="another_agent")` 实现。
+
+**通用价值**：组织架构设计——扁平化（Swarm）vs 层级化（Hierarchical）的权衡在管理学界已讨论百年。
+
+---
+
+### 14.9 Recursion Limit（图递归深度限制）【P1】
+
+**业务背景**：自循环节点（如 info_gathering）如果逻辑有 bug，图会无限递归直到栈溢出。当前靠 `MAX_ROUNDS` 常量手动防护。
+
+**通用概念**：资源上限保护 — 任何递归/循环都要有系统级硬限制，不只靠业务逻辑守卫。
+
+**做法**：LangGraph 编译时设置 `recursion_limit`，超过自动抛出 `GraphRecursionError`。
+
+```python
+graph = builder.compile(
+    checkpointer=checkpointer,
+)
+# 运行时传入
+config = {"recursion_limit": 25, "configurable": {"thread_id": session_id}}
+result = await graph.ainvoke(input, config)
+```
+
+**通用价值**：操作系统栈大小限制、数据库连接超时、网络 TTL——所有系统都需要硬上限防止资源耗尽。
+
+---
+
+### 14.10 Subgraph Streaming（子图事件流）【P2】
+
+**业务背景**：当前检索子图执行时，前端只能等子图全部跑完才看到结果。用户不知道子图内部"正在调用工具"还是"正在评估结果"。
+
+**通用概念**：细粒度可观测 — 不只看顶层结果，要看子过程的执行进度。
+
+**做法**：`graph.astream(input, subgraphs=True, stream_mode="updates")`，流式获取子图内部节点更新。
+
+**通用价值**：分布式系统的链路追踪、微服务的 span 嵌套——子过程的可观测性是复杂系统调试的基础。
+
+---
+
+---
+
+## 十五、GitHub 热门架构模式与语法实践
+
+> 基于 GitHub 热门 LangGraph/LangChain 项目调研，提炼可复用的架构模式和语法技巧。
+> 参考项目：[Mastering-Agentic-Design-Patterns](https://github.com/MahendraMedapati27/Mastering-Agentic-Design-Patterns-with-LangGraph)、[langgraph-complete-guide](https://github.com/mkassaf/langgraph-complete-guide)、[langgraph-boilerplate-kit](https://github.com/bhaskar511939/langgraph-boilerplate-kit)、[MultiModel-LangChain-RAG-LangGraph-AI-Expert](https://github.com/nithinmohantk/MultiModel-LangChain-RAG-LangGraph-AI-Expert)、[LangGraph Agent Architectures](https://markaicode.com/best/best-langgraph-agent-architecture/)
+
+### 15.1 Agentic RAG：文档评分 + 查询重写【P1】
+
+**业务背景**：当前检索完直接送 LLM 生成。如果检索结果不相关，生成的回答就是垃圾。应该在检索后先评估文档相关性，不相关就重写 query 再查。
+
+**通用概念**：质量门禁（Quality Gate）— 在每个关键步骤后加质量评估，不合格就回退重试，而非一路向前。
+
+**做法**（参考 [LangGraph Agentic RAG 官方教程](https://docs.langchain.com/oss/javascript/langgraph/agentic-rag)）：
+
+```
+retrieve → grade_documents → (相关? → generate) | (不相关? → rewrite_query → retrieve)
+```
+
+```python
+# 文档评分节点：LLM 判断每篇文档是否相关
+async def grade_documents(state):
+    llm = get_llm().with_structured_output(GradeResult, method="function_calling")
+    filtered = []
+    for doc in state["retrieved_cases"]:
+        result = await llm.ainvoke(f"文档是否回答了用户问题？\n问题: {state['query']}\n文档: {doc['content']}")
+        if result.is_relevant:
+            filtered.append(doc)
+    return {"retrieved_cases": filtered, "need_rewrite": len(filtered) == 0}
+
+# 查询重写节点：LLM 重写 query 提升检索效果
+async def rewrite_query(state):
+    if not state.get("need_rewrite"):
+        return {}
+    llm = get_llm()
+    rewritten = await llm.ainvoke(f"重写以下查询以提升检索效果: {state['query']}")
+    return {"query": rewritten.content, "rewrote": True}
+```
+
+**通用价值**：制造业的质检环节、CI/CD 的 test gate、API 的 response validation——质量门禁是任何流水线的标配。
+
+---
+
+### 15.2 Self-Reflective ReAct + 流式工具校验【P1】
+
+**业务背景**：ReAct 子图的 agent 节点让 LLM 决定调什么工具，但 LLM 有时会"幻觉"出不存在的工具或传错参数。
+
+**通用概念**：流式校验（Streaming Validation）— 不等 LLM 完整输出，在生成过程中实时校验，发现问题立即拦截。
+
+**数据支撑**：实测可拦截 94% 的幻觉工具调用，响应时间 < 2s（[LangGraph Agent Architectures Benchmark](https://markaicode.com/best/best-langgraph-agent-architecture/)）。
+
+**做法**：
+
+```python
+async def agent_node(state):
+    llm = get_llm().bind_tools(_TOOLS)
+    response = await llm.ainvoke(invoke_messages)
+
+    # 流式校验：tool_calls 是否合法
+    for tc in response.tool_calls or []:
+        if tc["name"] not in [_t.name for _t in _TOOLS]:
+            return {"messages": [AIMessage(f"工具 {tc['name']} 不存在，请重新选择。")]}
+        # 参数校验（Pydantic）
+        try:
+            validate_tool_args(tc)
+        except ValidationError as e:
+            return {"messages": [AIMessage(f"参数错误: {e}")]}
+
+    return {"messages": [response]}
+```
+
+**通用价值**：Web 表单的实时校验、数据库的 CHECK 约束、API Gateway 的请求 schema 校验——在数据进入系统前拦截是通用原则。
+
+---
+
+### 15.3 Hierarchical Agent Teams（层级 Agent 团队）【P2】
+
+**业务背景**：当前是单主图 + 一个检索子图。如果扩展到劳动、婚姻、刑事、知产等多个专业领域，每个领域有独立的法条库和案例库，需要多专业子 Agent 协作。
+
+**通用概念**：分而治之（Divide and Conquer）— 将大问题拆分为子问题，各专业 Agent 独立解决，再由协调者汇总。
+
+**数据支撑**：>10 个工具时，层级架构比扁平 Agent 延迟降 40%（9.2s → 5.5s）（[Benchmark](https://markaicode.com/best/best-langgraph-agent-architecture/)）。
+
+**做法**（参考 [Mastering-Agentic-Design-Patterns](https://github.com/MahendraMedapati27/Mastering-Agentic-Design-Patterns-with-LangGraph)）：
+
+```python
+from langgraph.types import Send
+
+# Supervisor 节点：fan-out 到多个专业子 Agent
+def assign_subagents(state):
+    intent = state["intent"]
+    tasks = []
+    if intent == "劳动争议":
+        tasks.append(Send("labor_agent", {"query": state["query"]}))
+    if intent == "合同纠纷":
+        tasks.append(Send("contract_agent", {"query": state["query"]}))
+    return tasks  # 并行发送到多个子图
+
+# Combiner 节点：fan-in 汇总结果
+def combine_results(state):
+    all_cases = []
+    for result in state["sub_results"]:
+        all_cases.extend(result.get("retrieved_cases", []))
+    return {"retrieved_cases": all_cases[:20]}  # 去重截断
+```
+
+**通用价值**：微服务的服务拆分、前端的组件化、组织架构的专业分工——分而治之是应对复杂度的通用手段。
+
+---
+
+### 15.4 Multi-Agent Debate（多 Agent 辩论）【P3】
+
+**业务背景**：法律问题往往没有绝对正确的答案（如"违约金过高是否可调整"），多个 Agent 从不同角度辩论能提升答案全面性。
+
+**通用概念**：对抗性思维（Adversarial Thinking）— 多个视角碰撞后取共识，比单一视角更全面。GAN 的生成器-判别器、安全领域的红队蓝队都是同一思想。
+
+**数据支撑**：事实一致性提升 40%，但 token 成本翻倍（[Benchmark](https://markaicode.com/best/best-langgraph-agent-architecture/)）。
+
+**做法**：
+
+```python
+# 3 个 Agent：proponent（支持）、opponent（反对）、judge（裁判）
+def debate_graph():
+    graph = StateGraph(DebateState)
+    graph.add_node("proponent", pro_agent)   # 论证支持方
+    graph.add_node("opponent", con_agent)    # 论证反对方
+    graph.add_node("judge", judge_agent)     # 综合裁判
+    graph.add_edge(START, "proponent")
+    graph.add_edge("proponent", "opponent")  # 看到对方论点后反驳
+    graph.add_edge("opponent", "judge")       # 裁判综合两方
+    graph.add_edge("judge", END)
+    return graph.compile()
+```
+
+**通用价值**：Code Review 的 approve/reject、学术论文的 peer review、法院的合议庭制度——多视角审查是质量保障的通用手段。
+
+---
+
+### 15.5 Send API 并行 Map-Reduce【P1】
+
+**业务背景**：当前检索是 BM25 + 向量串行执行。如果要加法条检索、裁判文书检索等更多路召回，串行延迟线性增长。
+
+**通用概念**：Map-Reduce — 将任务拆分为多个子任务并行执行（Map），再汇总结果（Reduce）。Hadoop 的核心思想。
+
+**做法**（参考 [LangGraph Send API](https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/)）：
+
+```python
+from langgraph.types import Send
+
+# Map：并行发送到多个检索节点
+def dispatch_retrieval(state):
+    return [
+        Send("bm25_retrieval", {"query": state["query"]}),
+        Send("vector_retrieval", {"query": state["query"]}),
+        Send("law_article_retrieval", {"query": state["query"]}),
+    ]
+
+# Reduce：各路结果汇聚后 RRF 融合
+def rrf_fusion(state):
+    all_candidates = state["bm25_results"] + state["vector_results"] + state["law_results"]
+    fused = rrf_merge(all_candidates)
+    return {"retrieved_cases": fused[:TOP_K]}
+```
+
+**通用价值**：Map-Reduce 是分布式计算的基础模式。从 Hadoop 到 Spark 到现代流处理，核心理念一致。
+
+---
+
+### 15.6 Checkpointer 选型策略【P0】
+
+**业务背景**：当前用 `MemorySaver`，进程重启丢状态。生产环境需要持久化。
+
+**通用概念**：存储选型 — 根据场景选合适的持久化后端，不是越贵越好。
+
+**选型表**（参考 [LangGraph State Management Guide](https://eastondev.com/blog/en/posts/ai/20260424-langgraph-agent-architecture/)）：
+
+| Checkpointer | 适用场景 | 优点 | 缺点 |
+|-------------|---------|------|------|
+| MemorySaver | 开发/测试 | 零配置，最快 | 重启丢失 |
+| SqliteSaver | 单机小项目 | 零配置 | 高并发写瓶颈 |
+| PostgresSaver | **生产推荐** | 可靠，支持高并发，水平扩展 | 需维护 PG |
+| RedisSaver | 低延迟场景 | 亚毫秒级读写 | 内存成本，持久化弱 |
+| MongoDBSaver | 文档型状态 | Schema 灵活 | 一致性不如 PG |
+
+**建议**：开发用 MemorySaver，生产直接上 PostgresSaver，**跳过 SqliteSaver**（高并发下写性能是灾难）。
+
+**通用价值**：数据库选型的通用方法论——按场景选存储引擎，不是"一招吃天下"。
+
+---
+
+### 15.7 Langfuse 开源可观测性替代【P2】
+
+**业务背景**：LangSmith 是 SaaS，数据在云端，某些企业合规不允许。Langfuse 是开源替代，可自部署。
+
+**通用概念**：自建 vs 托管 — 核心数据自主可控 vs 省运维成本。隐私敏感场景必须自建。
+
+**做法**：
+
+```python
+# Langfuse 集成（兼容 LangChain 自动追踪）
+import os
+os.environ["OT_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:3000"
+# Langfuse 兼容 OpenTelemetry 协议，LangChain 自动追踪无缝切换
+```
+
+**通用价值**：Grafana vs Datadog、MinIO vs S3、PostgreSQL vs MongoDB Atlas——自建 vs 托管是每个基础设施的选型决策。
+
+---
+
+### 15.8 Cluster 弹性伸缩架构【P3】
+
+**业务背景**：如果项目要支撑千万级用户，单机不够，需要集群化部署。
+
+**通用概念**：弹性伸缩（Auto-Scaling）— 根据负载动态增减计算资源。
+
+**做法**（参考 [LangGraph 超扩展架构](https://blog.csdn.net/gitblog_01129/article/details/150971348)）：
+
+```
+多区域部署：
+- 主区域：处理写请求与核心计算
+- 边缘区域：只读副本与就近服务
+- 灾备区域：数据备份与故障切换
+
+性能优化：
+- 状态分区：按业务域垂直拆分状态存储
+- 资源隔离：为不同优先级任务设置资源配额
+- 预热策略：提前初始化常用模型与工具
+- K8s Operator：自动扩缩容 + 故障转移
+```
+
+**通用价值**：CDN 的边缘节点、数据库的读写分离、微服务的 Pod 自动伸缩——弹性伸缩是高可用系统的标配。
+
+---
+
+### 15.9 Pydantic v3 状态校验加速【P3】
+
+**业务背景**：State Schema 用 TypedDict 定义，无运行时校验。如果用 Pydantic v3 可以获得运行时校验 + 更快的序列化。
+
+**通用概念**：类型安全 — 编译时类型检查 vs 运行时类型校验。TypeScript 的 `tsc` vs Pydantic 的 `model_validate`。
+
+**数据支撑**：Pydantic v3（2025 年底发布）比 v2 快数倍（[LangGraph State Guide](https://eastondev.com/blog/en/posts/ai/20260424-langgraph-agent-architecture/)）。
+
+**做法**：
+
+```python
+from pydantic import BaseModel, Field
+from langgraph.graph import add_messages
+
+class AgentState(BaseModel):
+    messages: list = Field(default_factory=list)
+    intent: str = Field(default="qa")
+    confidence: float = Field(ge=0.0, le=1.0)  # 自动校验范围
+    clarify_round: int = Field(default=0, ge=0, le=10)  # 自动校验上限
+```
+
+**通用价值**：Protocol Buffers、JSON Schema、GraphQL Type System——类型安全是系统间通信的通用保障。
+
+---
+
+### 15.10 Prompt 工程模式库【P3】
+
+**业务背景**：当前 prompt 散落在代码字符串中，没有结构化管理。项目扩展后 prompt 会爆炸式增长。
+
+**通用概念**：配置外置 — 将可变内容（prompt）从代码中分离，集中管理，支持版本化和 A/B 测试。
+
+**做法**（参考 [langgraph-boilerplate-kit](https://github.com/bhaskar511939/langgraph-boilerplate-kit) 的 `prompts/` 目录模式）：
+
+```
+backend/app/prompts/
+├── intent_recognition.py      # 意图识别 prompt
+├── info_gathering.py          # 信息收集 prompt
+├── qa_generation.py           # QA 生成 prompt
+├── document_generation.py     # 文书生成 prompt
+└── __init__.py                # 统一导出
+```
+
+进阶：用 LangSmith Prompt Hub 或 Langfuse Prompt Management 做版本化和 A/B 测试。
+
+**通用价值**：i18n 的 locale 文件、K8s 的 ConfigMap、feature flag 的 LaunchDarkly——配置外置是工程化标配。
+
+---
+
 ## 优化优先级总览
 
-| 优先级 | 项目 | 类型 | 理由 |
-|--------|------|------|------|
-| **P0** | 9.1 多级缓存 | 性能 | 投入产出比最高，立竿见影降本提速 |
-| **P0** | 9.5 优雅关闭 + 健康检查 | 工程 | 上生产的前提条件 |
-| **P0** | 11.2 PostgresSaver | LangGraph | 当前 MemorySaver 重启丢状态，生产不可用 |
-| **P1** | 9.2 限流熔断 | 工程 | 保护下游服务不被打挂 |
-| **P1** | 10.1 Map-Reduce 并行 | Agent | 检索并行化，延迟减半 |
-| **P1** | 11.1 astream_events | LangGraph | 前端体验提升明显 |
-| **P1** | 12.1 上下文压缩 | RAG | 降本 + 提速 |
-| **P2** | 10.2 Self-Reflection | Agent | 质量提升但增加延迟 |
-| **P2** | 9.3 异步任务队列 | 工程 | 文档量大时才需要 |
-| **P2** | 13.1 OpenTelemetry | 工程 | 规模上来后才有价值 |
-| **P3** | 9.4 连接池调优 | 性能 | 参数调整即可 |
-| **P3** | 9.6 uvloop | 性能 | Linux 部署时启用 |
-| **P3** | 11.3 子图状态隔离 | LangGraph | 代码整洁度 |
-| **P3** | 11.4 with_fallbacks | LangChain | 容灾增强 |
-| **P3** | 11.5 Custom Reducer | LangGraph | 消息裁剪 |
-| **P3** | 12.2 块顺序优化 | RAG | 零成本提升 |
-| **P3** | 12.3 批量 Embedding | RAG | 索引构建优化 |
-| **P3** | 12.4 动态检索策略 | RAG | 按需分配 |
-| **P3** | 13.2 structlog | 工程 | 结构化日志 |
-| **P3** | 13.3 Docker 多阶段 | 工程 | 镜像优化 |
-| **P3** | 13.4 CI/CD | 工程 | 自动化 |
-| **P3** | 13.5 安全加固 | 工程 | 底线保障 |
+| 优先级       | 项目                    | 类型      | 理由                                    |
+| ------------ | ----------------------- | --------- | --------------------------------------- |
+| **P0** | 9.1 多级缓存            | 性能      | 投入产出比最高，立竿见影降本提速        |
+| **P0** | 9.5 优雅关闭 + 健康检查 | 工程      | 上生产的前提条件                        |
+| **P0** | 11.2 PostgresSaver      | LangGraph | 当前 MemorySaver 重启丢状态，生产不可用 |
+| **P1** | 9.2 限流熔断            | 工程      | 保护下游服务不被打挂                    |
+| **P1** | 10.1 Map-Reduce 并行    | Agent     | 检索并行化，延迟减半                    |
+| **P1** | 11.1 astream_events     | LangGraph | 前端体验提升明显                        |
+| **P1** | 12.1 上下文压缩         | RAG       | 降本 + 提速                             |
+| **P2** | 10.2 Self-Reflection    | Agent     | 质量提升但增加延迟                      |
+| **P2** | 9.3 异步任务队列        | 工程      | 文档量大时才需要                        |
+| **P2** | 13.1 OpenTelemetry      | 工程      | 规模上来后才有价值                      |
+| **P3** | 9.4 连接池调优          | 性能      | 参数调整即可                            |
+| **P3** | 9.6 uvloop              | 性能      | Linux 部署时启用                        |
+| **P3** | 11.3 子图状态隔离       | LangGraph | 代码整洁度                              |
+| **P3** | 11.4 with_fallbacks     | LangChain | 容灾增强                                |
+| **P3** | 11.5 Custom Reducer     | LangGraph | 消息裁剪                                |
+| **P3** | 12.2 块顺序优化         | RAG       | 零成本提升                              |
+| **P3** | 12.3 批量 Embedding     | RAG       | 索引构建优化                            |
+| **P3** | 12.4 动态检索策略       | RAG       | 按需分配                                |
+| **P3** | 13.2 structlog          | 工程      | 结构化日志                              |
+| **P3** | 13.3 Docker 多阶段      | 工程      | 镜像优化                                |
+| **P3** | 13.4 CI/CD              | 工程      | 自动化                                  |
+| **P3** | 13.5 安全加固           | 工程      | 底线保障                                |
+| **P1** | 14.1 Pre/Post Hooks     | LangGraph | 法律场景护栏必备，拦截敏感输入/输出    |
+| **P2** | 14.2 Node Caching       | LangGraph | 意图识别节点缓存，省 LLM 调用          |
+| **P2** | 14.3 Cross-Thread Mem   | LangGraph | 跨会话记忆，用户体验提升               |
+| **P2** | 14.4 Delta Channels     | LangGraph | 长对话存储成本降 100x                 |
+| **P1** | 14.5 Typed Streaming    | LangGraph | 前端分阶段进度推送，体验提升明显       |
+| **P3** | 14.6 PTC                | LangGraph | 批量工具调用，省 token                |
+| **P3** | 14.7 Declarative HITL   | LangGraph | 声明式 HITL，代码侵入性低             |
+| **P3** | 14.8 Swarm/Hierarchical | Agent     | 多 Agent 拓扑扩展                     |
+| **P1** | 14.9 Recursion Limit    | LangGraph | 系统级防死循环，生产必备              |
+| **P2** | 14.10 Subgraph Stream   | LangGraph | 子图进度流式推送                       |
+| **P1** | 15.1 Agentic RAG 评分    | RAG       | 检索后评分+查询重写，质量门禁必备      |
+| **P1** | 15.2 流式工具校验        | Agent     | 拦截 94% 幻觉工具调用                  |
+| **P2** | 15.3 Hierarchical Teams  | Agent     | >10 工具时延迟降 40%                  |
+| **P3** | 15.4 Multi-Agent Debate  | Agent     | 事实一致性+40%，但成本翻倍             |
+| **P1** | 15.5 Send API Map-Reduce | LangGraph | 多路检索并行，延迟=sum→max            |
+| **P0** | 15.6 Checkpointer 选型   | LangGraph | 生产持久化，替代 MemorySaver          |
+| **P2** | 15.7 Langfuse 替代       | 可观测性  | 开源自部署，合规场景必备              |
+| **P3** | 15.8 Cluster 弹性伸缩    | 运维      | 千万级用户场景才需要                  |
+| **P3** | 15.9 Pydantic v3 校验    | 工程      | 运行时校验+序列化加速                  |
+| **P3** | 15.10 Prompt 模式库      | 工程      | prompt 集中管理+版本化                 |

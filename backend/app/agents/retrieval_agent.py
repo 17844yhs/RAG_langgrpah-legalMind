@@ -83,8 +83,12 @@ class RetrievalState(TypedDict):
     reformulated_query: str                           # 重写查询（retry 时更新）
     retrieved_cases: list                             # 最终检索结果
     tool_call_count: int                              # 工具调用次数（量化评估用）
+    interrupt_count: int                               # interrupt 次数（防死循环）
     status: str                                       # done / retry
     messages: Annotated[list[BaseMessage], add_messages]  # ReAct 对话链
+
+
+MAX_INTERRUPT_ROUNDS = 3  # 最多 interrupt 3 次，防止无限循环
 
 
 def _extract_cases_from_messages(messages: list) -> list:
@@ -123,17 +127,29 @@ async def agent_node(state: RetrievalState) -> dict:
     }
 
 def evaluate_node(state: RetrievalState) -> dict:
-    """评估检索结果：数量够不够，决定 done / retry / interrupt"""
+    """评估检索结果：数量够不够，决定 done / retry / interrupt
+
+    重试策略：
+    - 自动重试：tool_call_count < 2 时自动重试（不 interrupt）
+    - HITL 介入：自动重试耗尽后 interrupt，用户补充后重试 1 次
+    - 死循环守卫：interrupt 次数 >= MAX_INTERRUPT_ROUNDS → 强制 done（放行）
+    """
     cases = _extract_cases_from_messages(state["messages"])
     count = len(cases)
     retry = state.get("tool_call_count", 0)
+    interrupt_count = state.get("interrupt_count", 0)
+
     # 结果够了
     if count >= 3:
         return {"retrieved_cases": cases, "status": "done"}
 
     # 还没重试够，自动再来一轮
-    if retry < 3:
+    if retry < 2:
         return {"retrieved_cases": cases, "status": "retry"}
+
+    # interrupt 次数耗尽 → 强制放行（防死循环，兜底返回已有结果）
+    if interrupt_count >= MAX_INTERRUPT_ROUNDS:
+        return {"retrieved_cases": cases, "status": "done"}
 
     # 自动重试耗尽 → 人工介入（HITL interrupt）
     user_supplement = interrupt({
@@ -146,13 +162,15 @@ def evaluate_node(state: RetrievalState) -> dict:
             f"- 关键的案件事实描述"
         ),
         "current_count": count,
+        "interrupt_round": interrupt_count + 1,
     })
 
-    # resume 后拿到用户补充信息，标记重试
+    # resume 后拿到用户补充信息，标记重试 + interrupt 次数 +1
     return {
         "retrieved_cases": cases,
         "status": "retry",
         "reformulated_query": state["query"] + " " + user_supplement,
+        "interrupt_count": interrupt_count + 1,
     }
 
 
