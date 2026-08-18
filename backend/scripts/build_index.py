@@ -86,9 +86,15 @@ async def build_index():
         old_count = collection.count()
         if old_count > 0:
             collection.delete(ids=collection.get()["ids"])
-            print(f"  已清空旧索引：{old_count} 条")
+            print(f"  已清空旧向量索引：{old_count} 条")
     except Exception as e:
-        print(f"  清空旧索引失败（可能是空库）：{e}")
+        print(f"  清空旧向量索引失败（可能是空库）：{e}")
+
+    # 删除旧 BM25 持久化索引（向量库重建后 BM25 需同步重建）
+    from app.config import settings
+    if os.path.exists(settings.BM25_INDEX_PATH):
+        os.remove(settings.BM25_INDEX_PATH)
+        print(f"  已删除旧 BM25 持久化索引：{settings.BM25_INDEX_PATH}")
 
     vector_store.add_documents(all_chunks)
 

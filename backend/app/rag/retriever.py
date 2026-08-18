@@ -1,10 +1,16 @@
 """混合检索器 — RRF 融合向量检索和 BM25 关键词检索"""
+import os
+import pickle
+import logging
 from typing import List, Dict, Optional
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
 from app.rag.vector_store import get_vector_store
 from app.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def _rrf_fusion(
@@ -50,14 +56,53 @@ class HybridRetriever:
         self._init_bm25_from_store()
 
     def _init_bm25_from_store(self):
-        """从向量库加载已有文档，初始化 BM25 检索器"""
+        """从持久化文件加载 BM25 索引；失败则从向量库重建并持久化
+
+        持久化策略：
+        - 首次启动：从向量库全量加载 → 构建 BM25 → pickle 持久化
+        - 后续启动：直接 load pickle，跳过向量库查询和索引构建（快 10-100x）
+        - build_index.py 重建向量库时会删除 pickle，强制重新构建
+        """
+        # 1. 尝试加载持久化索引
+        if os.path.exists(settings.BM25_INDEX_PATH):
+            try:
+                with open(settings.BM25_INDEX_PATH, "rb") as f:
+                    self.bm25_retriever = pickle.load(f)
+                logger.info(
+                    "BM25 索引已从持久化文件加载: %s",
+                    settings.BM25_INDEX_PATH,
+                )
+                return
+            except Exception as e:
+                logger.warning(
+                    "BM25 持久化索引加载失败，回退到重建: %s", e
+                )
+
+        # 2. 从向量库重建
         existing = self.vector_store.get()
         if existing and existing.get("documents"):
             docs = [
                 Document(page_content=doc, metadata=meta or {})
                 for doc, meta in zip(existing.get("documents"), existing.get("metadatas"))
             ]
-            self.bm25_retriever = BM25Retriever.from_documents(docs, k=settings.RAG_TOP_K * 2)
+            self.bm25_retriever = BM25Retriever.from_documents(
+                docs, k=settings.RAG_TOP_K * 2
+            )
+            logger.info(
+                "BM25 索引已从向量库重建：%d 个文档", len(docs)
+            )
+
+            # 3. 持久化索引（失败不影响运行）
+            try:
+                os.makedirs(
+                    os.path.dirname(settings.BM25_INDEX_PATH) or ".",
+                    exist_ok=True,
+                )
+                with open(settings.BM25_INDEX_PATH, "wb") as f:
+                    pickle.dump(self.bm25_retriever, f)
+                logger.info("BM25 索引已持久化到 %s", settings.BM25_INDEX_PATH)
+            except Exception as e:
+                logger.warning("BM25 索引持久化失败（不影响运行）: %s", e)
 
     @staticmethod
     def _is_simple_filter(filters: Dict) -> bool:

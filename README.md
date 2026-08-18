@@ -1,3 +1,6 @@
+claude
+
+
 <p align="center">
   <img src="frontend/src/assets/hero.png" alt="LegalMind" width="400"/>
 </p>
@@ -49,7 +52,7 @@
 | Tortoise ORM           | Pinia 状态管理          | Chroma 向量数据库 |
 | JWT (python-jose)      | Vue Router 5            | LangSmith 追踪    |
 | BGE-Reranker-v2-m3     | Axios / marked          | —                |
-| LangGraph Checkpointer | —                       | —                |
+| LangGraph Checkpointer | —                      | —                |
 
 ## 🚀 快速开始
 
@@ -192,20 +195,20 @@ legal_mind/
 
 ## 📡 API 概览
 
-| 路径                                 | 方法   | 说明                          |
-| ------------------------------------ | ------ | ----------------------------- |
-| `/health`                          | GET    | 健康检查                      |
-| `/api/auth/register`               | POST   | 用户注册                      |
-| `/api/auth/login`                  | POST   | 用户登录（返回 JWT）          |
-| `/api/chat/send`                   | POST   | 发送聊天消息（非流式）        |
-| `/api/chat/stream`                 | POST   | 发送聊天消息（SSE 流式）      |
-| `/api/chat/resume`                 | POST   | 恢复 HITL 中断的会话          |
-| `/api/chat/sessions`               | GET    | 获取会话列表                  |
-| `/api/chat/sessions/{id}/messages` | GET    | 获取会话消息                  |
-| `/api/chat/sessions/{id}`          | DELETE | 删除会话                      |
-| `/api/documents/generate`          | POST   | 生成法律文书                  |
-| `/api/cases/search`                | GET    | 搜索案例                      |
-| `/api/cases/list`                  | GET    | 获取案例列表                  |
+| 路径                                 | 方法   | 说明                     |
+| ------------------------------------ | ------ | ------------------------ |
+| `/health`                          | GET    | 健康检查                 |
+| `/api/auth/register`               | POST   | 用户注册                 |
+| `/api/auth/login`                  | POST   | 用户登录（返回 JWT）     |
+| `/api/chat/send`                   | POST   | 发送聊天消息（非流式）   |
+| `/api/chat/stream`                 | POST   | 发送聊天消息（SSE 流式） |
+| `/api/chat/resume`                 | POST   | 恢复 HITL 中断的会话     |
+| `/api/chat/sessions`               | GET    | 获取会话列表             |
+| `/api/chat/sessions/{id}/messages` | GET    | 获取会话消息             |
+| `/api/chat/sessions/{id}`          | DELETE | 删除会话                 |
+| `/api/documents/generate`          | POST   | 生成法律文书             |
+| `/api/cases/search`                | GET    | 搜索案例                 |
+| `/api/cases/list`                  | GET    | 获取案例列表             |
 
 ## 🧪 运行测试
 
@@ -218,13 +221,13 @@ uv run pytest test/test_rag.py -v  # 单个测试文件
 
 ## 📊 评估指标
 
-| 指标 | 数值 |
-|------|------|
-| RAGAS Context Recall | 0.90 |
-| RAGAS Answer Relevancy | 0.95 |
-| 自定义评估 答案相关性 | 0.94 |
-| 自定义评估 忠实度 | 0.82 |
-| 评估数据集规模 | 100 条 |
+| 指标                   | 数值   |
+| ---------------------- | ------ |
+| RAGAS Context Recall   | 0.90   |
+| RAGAS Answer Relevancy | 0.95   |
+| 自定义评估 答案相关性  | 0.94   |
+| 自定义评估 忠实度      | 0.82   |
+| 评估数据集规模         | 100 条 |
 
 ## 🗺️ 路线图
 

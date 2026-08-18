@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # 向量数据库配置
     VECTOR_STORE: str = "chroma"  # chroma, milvus
     VECTOR_STORE_PATH: str = "./data/chroma"
+    BM25_INDEX_PATH: str = "./data/bm25_index.pkl"  # BM25 索引持久化路径
     
     # RAG配置
     RAG_TOP_K: int = 5
