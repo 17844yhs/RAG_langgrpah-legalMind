@@ -17,7 +17,8 @@ class ChatMessageRecord(Model):
     chat_session = fields.ForeignKeyField("models.ChatSession", related_name="messages", on_delete=fields.CASCADE, description="关联聊天会话")
     role = fields.CharField(max_length=20, description="消息角色（user/assistant）")
     content = fields.TextField(description="消息内容")
+    meta = fields.JSONField(null=True, description="回答元数据（summary/risk_level/applicable_laws，仅 assistant 消息）")
     created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
-    
+
     class Meta:
         table = "chat_messages"

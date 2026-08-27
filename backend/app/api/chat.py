@@ -55,10 +55,14 @@ async def _ensure_session(session_id: str, user_obj: User) -> ChatSession:
     return session
 
 
-async def _record_messages(session: ChatSession, user_msg: str, assistant_msg: str) -> None:
-    """把一轮对话写入 ChatMessageRecord，供侧边栏 UI 读取"""
+async def _record_messages(session: ChatSession, user_msg: str, assistant_msg: str, meta: dict = None) -> None:
+    """把一轮对话写入 ChatMessageRecord，供侧边栏 UI 读取。
+
+    meta：assistant 消息的结构化元数据（summary/risk_level/applicable_laws），
+    持久化后刷新页面/加载历史会话时卡片不丢失。
+    """
     await ChatMessageRecord.create(chat_session=session, role="user", content=user_msg)
-    await ChatMessageRecord.create(chat_session=session, role="assistant", content=assistant_msg)
+    await ChatMessageRecord.create(chat_session=session, role="assistant", content=assistant_msg, meta=meta)
 
 
 async def _check_interrupt(session_id: str) -> Optional[dict]:
@@ -87,9 +91,9 @@ async def _finalize_stream(session, query, full_text, session_id):
         if fallback:
             full_text = fallback
             yield f"data: {json.dumps({'content': fallback}, ensure_ascii=False)}\n\n"
-    # 写入侧边栏记录
+    # 写入侧边栏记录（连同元数据一起持久化）
     if full_text:
-        await _record_messages(session, query, full_text)
+        await _record_messages(session, query, full_text, values.get("answer_meta"))
     # 发送回答元数据（结构化输出抽取的结论/风险等级/法条）
     meta = values.get("answer_meta")
     if meta:
@@ -244,7 +248,10 @@ async def _get_owned_session(session_id: str, user_info: dict) -> ChatSession:
 async def get_session_messages(session_id: str, user=Depends(get_current_user), limit: int = 50):
     session = await _get_owned_session(session_id, user)
     messages = await ChatMessageRecord.filter(chat_session=session).order_by("created_at").limit(limit)
-    return {"messages": [{"role": m.role, "content": m.content} for m in messages]}
+    return {"messages": [
+        {"role": m.role, "content": m.content, "meta": m.meta}
+        for m in messages
+    ]}
 
 
 @router.delete("/sessions/{session_id}")
