@@ -22,7 +22,17 @@ export function streamGenerateDocument(documentType, query, params, useReference
       signal: controller.signal,
     })
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) {
+      // 流式端点在响应头阶段就失败：解析 RFC 9457 错误体
+      const err = new Error(`HTTP ${response.status}`)
+      try {
+        const body = await response.json()
+        err.code = body.code        // 业务错误码，如 AUTH_001
+        err.traceId = body.traceId  // 报障凭据
+        if (body.detail) err.message = body.detail
+      } catch { /* 非 JSON 响应保持默认消息 */ }
+      throw err
+    }
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()

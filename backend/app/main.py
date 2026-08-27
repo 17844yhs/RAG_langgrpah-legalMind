@@ -2,9 +2,14 @@
 import os
 import sys
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from app.config import settings
+
+# uvicorn 只配置自己的 logger，root logger 需要这里兜底，
+# 否则 app.* 的业务日志（如全局异常处理器的堆栈日志）不会输出
+logging.basicConfig(level=logging.INFO)
 
 # ── LangSmith 追踪注入 ──────────────────────────────────
 # LangChain 自动追踪检查的是 os.environ，不是 pydantic Settings
@@ -38,6 +43,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.database import init_db,close_db
 from app.rag.vector_store import init_vector_store
 from app.llm.checkpoint import init_checkpointer,close_checkpointer
+from app.exceptions.handlers import register_exception_handlers, TraceIdMiddleware
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -64,6 +70,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 全局异常处理：所有错误响应统一走 RFC 9457 Problem Details 格式
+register_exception_handlers(app)
+# traceId 中间件：每个请求生成/透传排查 ID，响应头与错误体都会携带
+app.add_middleware(TraceIdMiddleware)
 
 from app.api import auth,chat,documents,cases
 app.include_router(auth.router,prefix="/api/auth",tags=["认证"])

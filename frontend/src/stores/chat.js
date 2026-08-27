@@ -73,6 +73,11 @@ export const useChatStore = defineStore('chat', () => {
           await loadSessions()
         }
       }
+      // ── SSE 错误事件：展示后端统一错误文案 ──
+      if (chunk.error) {
+        messages.value[aiIdx].content = chunk.error.detail || '服务暂时不可用，请稍后重试'
+        break
+      }
       // ── Human-in-the-Loop：检测到 interrupt ──
       if (chunk.interrupt) {
         pendingInterrupt.value = chunk.interrupt
@@ -107,7 +112,8 @@ export const useChatStore = defineStore('chat', () => {
       await _consumeStream(stream, aiIdx)
     } catch (e) {
       if (e.name !== 'AbortError') {
-        messages.value[aiIdx].content = '抱歉，消息发送失败，请重试。'
+        // e.message 来自后端 problem+json 的 detail（流式端点为解析后的错误体）
+        messages.value[aiIdx].content = e.message || '抱歉，消息发送失败，请重试。'
       }
     } finally {
       isStreaming.value = false

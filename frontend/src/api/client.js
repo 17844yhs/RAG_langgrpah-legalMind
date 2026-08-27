@@ -20,10 +20,21 @@ client.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// 响应拦截器 - 统一处理 401
+// 响应拦截器 - 统一解析 RFC 9457 错误体 + 处理 401
 client.interceptors.response.use(
   (response) => response,
   (error) => {
+    // 后端所有错误响应统一为 problem+json：{ code, detail, traceId, ... }
+    let body = error.response?.data
+    if (typeof body === 'string') {
+      // application/problem+json 兜底手动解析
+      try { body = JSON.parse(body) } catch { /* 保持原样 */ }
+    }
+    if (body && typeof body === 'object' && body.code) {
+      error.app_code = body.code        // 业务错误码，如 AUTH_001，页面据此做逻辑分支
+      error.app_message = body.detail    // 人类可读文案
+      error.trace_id = body.traceId     // 用户报障凭据，后端日志一键定位
+    }
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')

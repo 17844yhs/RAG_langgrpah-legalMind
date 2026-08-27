@@ -1,12 +1,17 @@
 """
 案例检索 API 路由
 """
-from fastapi import APIRouter, HTTPException, Query
+import logging
+
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import List, Optional
 
 from app.agents.retrieval_agent import RetrievalAgent
 from app.services.case_service import CaseService
+from app.exceptions import CaseError, ErrorCode, RAGError
+
+logger = logging.getLogger("app.error")
 
 router = APIRouter()
 
@@ -38,11 +43,17 @@ async def search_cases_get(
         filters["case_type"]= case_type
     
     agent = RetrievalAgent()
-    results = await agent.retrieve(
-        query=q,
-        top_k=limit,
-        filters=filters if filters else None
-    )
+    try:
+        results = await agent.retrieve(
+            query=q,
+            top_k=limit,
+            filters=filters if filters else None
+        )
+    except Exception:
+        # 检索链路（Chroma/BM25/Reranker）任一环节失败，
+        # 都不把原始异常抛给用户，统一翻译成 RAG_001 + 500
+        logger.exception("案例检索失败: q=%s", q)
+        raise RAGError(ErrorCode.RAG_RETRIEVAL_FAILED)
 
     return {"cases": results, "total": len(results)}
 
@@ -50,8 +61,14 @@ async def search_cases_get(
 async def get_case_detail(case_id: str):
     """获取案例详情"""
     service = CaseService()
-    case = await service.get_by_id(case_id)
+    try:
+        case = await service.get_by_id(case_id)
+    except Exception:
+        # id 为 UUID 主键，格式非法（如 "abc"）会让 ORM 抛 OperationalError，
+        # 对用户而言等价于"案例不存在"，翻译成 404 而非 500
+        logger.warning("案例 id 格式非法: %s", case_id)
+        raise CaseError(ErrorCode.CASE_NOT_FOUND)
 
     if not case:
-        raise HTTPException(status_code=404,detail="没有找到这个案例")
+        raise CaseError(ErrorCode.CASE_NOT_FOUND)
     return CaseDetail(**case)

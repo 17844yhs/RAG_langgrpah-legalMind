@@ -2,8 +2,9 @@
 文书生成 API 路由
 """
 import json
+import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, List
@@ -11,6 +12,9 @@ from typing import Dict, List
 from app.agents.document_agent import DocumentAgent
 from app.agents.retrieval_agent import RetrievalAgent
 from app.dependencies import get_current_user
+from app.exceptions import AppException, sse_error_event
+
+logger = logging.getLogger("app.error")
 
 router = APIRouter()
 
@@ -54,8 +58,10 @@ async def generate_document(request: DocumentGenerateRequest, user=Depends(get_c
     )
 
 @router.post("/generate/stream")
-async def generate_document_stream(request: DocumentGenerateRequest, user=Depends(get_current_user)):
+async def generate_document_stream(request: DocumentGenerateRequest, user=Depends(get_current_user), http_request: Request = None):
     """生成法律文书（流式）"""
+    trace_id = http_request.state.trace_id if http_request else None
+
     async def generate():
         try:
             agent = DocumentAgent()
@@ -82,11 +88,15 @@ async def generate_document_stream(request: DocumentGenerateRequest, user=Depend
             if references:
                 yield f"data: {json.dumps({'references': references[:2]}, ensure_ascii=False)}\n\n"
 
-            yield "data: [DONE]\n\n"
+        except AppException as e:
+            # 已知业务错误：错误码 + 文案可以放心给前端
+            yield sse_error_event(e.code.value, e.detail, trace_id)
+        except Exception:
+            # 未知错误：堆栈只进日志（原始异常可能含模型路径等敏感信息），对外只给 traceId
+            logger.exception("[%s] SSE 流式文书生成失败", trace_id)
+            yield sse_error_event("SYS_001", "文书生成服务暂时不可用，请稍后重试", trace_id)
 
-        except Exception as e:
-            yield f"data: {json.dumps({'content': f'生成失败：{e}'}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

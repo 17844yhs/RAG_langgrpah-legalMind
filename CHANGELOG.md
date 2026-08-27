@@ -5,6 +5,27 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-08-27
+
+### 新增
+
+- **🚨 统一异常处理 + 错误码（RFC 9457 Problem Details）**：新增 `backend/app/exceptions/` 包，错误码注册表（`SYS_/AUTH_/CHAT_/CASE_/RAG_` 前缀）+ 业务异常基类（`AppException` 及领域子类）+ 全局异常处理器，所有错误响应统一为 `application/problem+json` 格式（`type/title/status/detail/instance` 标准字段 + `code/traceId` 扩展字段）
+- **🔍 TraceId 全链路排查**：纯 ASGI 中间件为每个请求生成/透传 traceId（请求日志 + 响应头 `X-Request-ID` + 错误体三处携带），未捕获异常堆栈只进日志、对外只回 traceId
+- **📡 SSE 错误通道**：流式端点（chat/stream、chat/resume、documents/generate/stream）错误以约定 `error` 事件传递（code + detail + traceId）
+
+### 修复
+
+- **SSE 流信息泄漏**：原来把原始异常字符串 `{e}` 直接吐给用户（可能含 DB 连接串、模型路径），改为固定文案 + traceId
+- **错误响应格式不一致**：裸 `HTTPException`（`{detail}`）、FastAPI 默认 422、框架 404 三种结构并存，前端无法统一处理
+
+### 变更
+
+- **参数校验错误状态码 422 → 400**：`SYS_002` 错误码 + `errors` 数组（field/message/type），422 语义留给业务规则校验
+- **前端错误处理**：`client.js` 响应拦截器解析 problem 体（`app_code/app_message/trace_id`）；`chat.js`/`documents.js` 流式错误展示后端统一文案
+- **API 错误响应结构变更**：`{"detail": "..."}` → `{"type", "title", "status", "detail", "instance", "code", "traceId"}`
+
+---
+
 ## [0.2.0] - 2026-08-12
 
 ### 新增

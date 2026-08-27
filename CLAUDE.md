@@ -41,6 +41,7 @@ legal_mind/
 │   │   ├── llm/              # LLM 客户端、提示词模板
 │   │   ├── models/           # Tortoise ORM 数据模型
 │   │   ├── services/         # 业务逻辑层
+│   │   ├── exceptions/       # 统一异常处理（RFC 9457 错误码 + 全局处理器 + traceId 中间件）
 │   │   ├── db/               # 数据库连接
 │   │   ├── utils/            # 工具函数（密码哈希、JWT）
 │   │   ├── config.py         # Pydantic Settings 配置

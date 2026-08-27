@@ -70,10 +70,16 @@ async function handleGenerate() {
       if (chunk.references) {
         references.value = chunk.references
       }
+      // SSE 错误事件：展示后端统一错误文案
+      if (chunk.error) {
+        error.value = chunk.error.detail || '生成失败，请重试'
+        break
+      }
     }
   } catch (e) {
     if (e.name !== 'AbortError') {
-      error.value = '生成失败，请重试'
+      // e.message 来自后端 problem+json 的 detail
+      error.value = e.message || '生成失败，请重试'
     }
   } finally {
     isLoading.value = false

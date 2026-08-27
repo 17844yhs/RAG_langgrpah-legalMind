@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from datetime import timedelta
 from app.models.user import User
 from app.utils.security import verify_password, get_password_hash, create_access_token
 from app.config import settings
+from app.exceptions import AuthError, ErrorCode
 
 router = APIRouter()
 
@@ -26,9 +27,9 @@ class TokenResponse(BaseModel):
 @router.post("/register",response_model=TokenResponse)
 async def register(req:RegisterReqeust):
     if await User.filter(username=req.username).exists():
-        raise HTTPException(status_code=400,detail="用户名已注册")
+        raise AuthError(ErrorCode.AUTH_USERNAME_TAKEN)
     if await User.filter(email=req.email).exists():
-        raise HTTPException(status_code=400,detail="邮箱已注册")
+        raise AuthError(ErrorCode.AUTH_EMAIL_TAKEN)
 
     nickname = req.nickname or req.username
     user = await User.create(
@@ -44,6 +45,6 @@ async def register(req:RegisterReqeust):
 async def login(req:LoginRequest):
     user = await User.get_or_none(username=req.username)
     if not user or not verify_password(req.password,user.hashed_password):
-        raise HTTPException(status_code=401,detail="用户名或者密码错误")
+        raise AuthError(ErrorCode.AUTH_BAD_CREDENTIALS)
     token = create_access_token({"sub":str(user.id)},timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     return TokenResponse(access_token=token,username=user.username,nickname= user.nickname)

@@ -404,7 +404,7 @@ intent_recognition → check_intent → info_gathering ──→ router → ...
 | P2     | 实现 Human-in-the-Loop（interrupt） | 8h   | 确认后准确率 + 有效答案率 | ✅   |
 | P2     | 补充单元测试                        | 4h   | 测试覆盖率                |      |
 | P3     | locust 压测                         | 2h   | QPS + 延迟数据            |      |
-| P3     | 异常处理 + 统一错误码               | 3h   | 工程完整性                |      |
+| P3     | 异常处理 + 统一错误码               | 3h   | 工程完整性                | ✅   |
 
 ---
 

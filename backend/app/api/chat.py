@@ -1,17 +1,20 @@
 """聊天 API — 支持 SSE 流式输出 + Human-in-the-Loop interrupt/resume"""
 import uuid
 import json
+import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.agents.workflow import workflow
 from app.dependencies import get_current_user
+from app.exceptions import AppException, ChatError, ErrorCode, sse_error_event
 from app.models.chat import ChatSession, ChatMessageRecord
 from app.models.user import User
 
+logger = logging.getLogger("app.error")
 
 router = APIRouter()
 # 请求/响应模型 
@@ -110,13 +113,16 @@ async def send_message(request: ChatRequest, user=Depends(get_current_user)):
         session_id=session_id,
     )
 
+# equest:ChatRequest 是 FastAPI 把 HTTP 请求体按 ChatRequest 模型解析后注入的对象；
+# http_request:Request 是注入原始的 HTTP 请求对象。一个拿业务数据，一个拿元数据
 @router.post("/stream")
-async def stream_message(request: ChatRequest, user=Depends(get_current_user)):
+async def stream_message(request: ChatRequest, user=Depends(get_current_user), http_request: Request = None):
     """发送消息（流式响应 + interrupt 检测）"""
     user_obj = await _get_user_obj(user)
     session_id = request.session_id or str(uuid.uuid4())
     session = await _ensure_session(session_id, user_obj)
     query = request.message
+    trace_id = http_request.state.trace_id if http_request else None
 
     async def generate():
         full_text = ""
@@ -130,7 +136,7 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user)):
                     full_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
 
-            # 检查是否被 interrupt 打断 
+            # 检查是否被 interrupt 打断
             interrupt_data = await _check_interrupt(session_id)
             if interrupt_data:
                 # 被打断：发送 interrupt 事件给前端，等待用户交互
@@ -138,20 +144,25 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user)):
                 yield "data: [DONE]\n\n"
                 return
 
-            #  正常结束 
+            #  正常结束
             async for event in _finalize_stream(session, query, full_text, session_id):
                 yield event
 
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'content': f'抱歉，处理出错：{e}'}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
+        except AppException as e:
+            # 已知业务错误：错误码 + 文案可以放心给前端
+            yield sse_error_event(e.code.value, e.detail, trace_id)
+        except Exception:
+            # 未知错误：堆栈只进日志（原始异常可能含连接串等敏感信息），对外只给 traceId
+            logger.exception("[%s] SSE 流式回答失败", trace_id)
+            yield sse_error_event("SYS_001", "服务暂时不可用，请稍后重试", trace_id)
+
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.post("/resume")
-async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_user)):
+async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_user), http_request: Request = None):
     """恢复被 interrupt 打断的图执行（流式响应）。
 
     用户回答了 interrupt 问题后调用此端点。
@@ -160,6 +171,7 @@ async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_us
     """
     user_obj = await _get_user_obj(user)
     session = await _ensure_session(request.session_id, user_obj)
+    trace_id = http_request.state.trace_id if http_request else None
 
     async def generate():
         full_text = ""
@@ -180,21 +192,26 @@ async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_us
                 yield "data: [DONE]\n\n"
                 return
 
-            #  正常结束 
+            #  正常结束
             async for event in _finalize_stream(
                 session, f"[resume] {request.response}", full_text, request.session_id
             ):
                 yield event
 
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'content': f'抱歉，处理出错：{e}'}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
+        except AppException as e:
+            # 已知业务错误：错误码 + 文案可以放心给前端
+            yield sse_error_event(e.code.value, e.detail, trace_id)
+        except Exception:
+            # 未知错误：堆栈只进日志，对外只给 traceId
+            logger.exception("[%s] SSE resume 流式回答失败", trace_id)
+            yield sse_error_event("SYS_001", "服务暂时不可用，请稍后重试", trace_id)
+
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-#  会话管理 
+#  会话管理
 @router.get("/sessions")
 async def list_sessions(user=Depends(get_current_user)):
     """获取当前用户的会话列表"""
@@ -215,7 +232,7 @@ async def _get_owned_session(session_id: str, user_info: dict) -> ChatSession:
     """获取属于当前用户的会话，不存在或越权则 404"""
     session = await ChatSession.get_or_none(session_id=session_id)
     if not session or str(session.user_id) != user_info["user_id"]:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        raise ChatError(ErrorCode.CHAT_SESSION_NOT_FOUND)
     return session
 
 
