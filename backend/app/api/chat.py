@@ -90,6 +90,10 @@ async def _finalize_stream(session, query, full_text, session_id):
     # 写入侧边栏记录
     if full_text:
         await _record_messages(session, query, full_text)
+    # 发送回答元数据（结构化输出抽取的结论/风险等级/法条）
+    meta = values.get("answer_meta")
+    if meta:
+        yield f"data: {json.dumps({'meta': meta}, ensure_ascii=False)}\n\n"
     # 发送引用来源
     sources = values.get("sources") or []
     if sources:

@@ -28,6 +28,7 @@ class AgentState(TypedDict):
     document_params: dict         # 文书参数
     response: str                 # 最终响应
     sources: list                 # 来源引用
+    answer_meta: dict             # 回答元数据（summary/risk_level/applicable_laws）
     messages: Annotated[list[BaseMessage], add_messages]  # 对话历史
 
 class LegalMindWorkflow:
@@ -94,10 +95,16 @@ class LegalMindWorkflow:
         async for chunk in self.qa_agent.stream_answer(cases, messages):
             full_text += chunk.content or ""
 
+        # 流式正文完成后抽取元数据（结论/风险等级/法条）。
+        # 此时 token 已流给前端，抽取的 1-2s 用户无感知；
+        # 失败返回 None 不阻塞——元数据是增强，不是关键路径
+        meta = await self.qa_agent.extract_meta(full_text)
+
         return {
             "response": full_text,
             "messages": [AIMessage(content=full_text)],
             "sources": self.qa_agent._extract_sources(cases),
+            "answer_meta": meta.model_dump() if meta else {},
         }
 
     async def _document_node(self, state: AgentState) -> dict:

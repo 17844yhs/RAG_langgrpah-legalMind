@@ -1,4 +1,3 @@
-
 # LegalMind 项目改造计划
 
 > 目标：把一个"调 API 的 demo"改造成面试能打的项目
@@ -299,6 +298,7 @@ intent_recognition → check_intent → info_gathering ──→ router → ...
 ```
 
 **关键设计**：
+
 - LLM 一次调用完成两件事（充分性判断 + 追问生成），减少 API 调用
 - 追问 + 用户回答都追加到 messages，下轮 LLM 看到完整 Q&A 上下文
 - `MAX_CLARIFY_ROUNDS=3` 防死循环守卫
@@ -1624,6 +1624,7 @@ graph = builder.compile(
 **业务背景**：当前是单主图 + 检索子图的简单结构。如果扩展到劳动、婚姻、刑事等多个专业领域，需要更灵活的多 Agent 协作模式。
 
 **通用概念**：
+
 - **Swarm**：Agent 之间直接交接，无中心调度。灵活但难追踪。
 - **Hierarchical**：父图委托子任务给子图，子图独立完成后汇报。模块化、可复用。
 
@@ -1842,13 +1843,13 @@ def rrf_fusion(state):
 
 **选型表**（参考 [LangGraph State Management Guide](https://eastondev.com/blog/en/posts/ai/20260424-langgraph-agent-architecture/)）：
 
-| Checkpointer | 适用场景 | 优点 | 缺点 |
-|-------------|---------|------|------|
-| MemorySaver | 开发/测试 | 零配置，最快 | 重启丢失 |
-| SqliteSaver | 单机小项目 | 零配置 | 高并发写瓶颈 |
-| PostgresSaver | **生产推荐** | 可靠，支持高并发，水平扩展 | 需维护 PG |
-| RedisSaver | 低延迟场景 | 亚毫秒级读写 | 内存成本，持久化弱 |
-| MongoDBSaver | 文档型状态 | Schema 灵活 | 一致性不如 PG |
+| Checkpointer  | 适用场景           | 优点                       | 缺点               |
+| ------------- | ------------------ | -------------------------- | ------------------ |
+| MemorySaver   | 开发/测试          | 零配置，最快               | 重启丢失           |
+| SqliteSaver   | 单机小项目         | 零配置                     | 高并发写瓶颈       |
+| PostgresSaver | **生产推荐** | 可靠，支持高并发，水平扩展 | 需维护 PG          |
+| RedisSaver    | 低延迟场景         | 亚毫秒级读写               | 内存成本，持久化弱 |
+| MongoDBSaver  | 文档型状态         | Schema 灵活                | 一致性不如 PG      |
 
 **建议**：开发用 MemorySaver，生产直接上 PostgresSaver，**跳过 SqliteSaver**（高并发下写性能是灾难）。
 
@@ -1950,47 +1951,47 @@ backend/app/prompts/
 
 ## 优化优先级总览
 
-| 优先级       | 项目                    | 类型      | 理由                                    |
-| ------------ | ----------------------- | --------- | --------------------------------------- |
-| **P0** | 9.1 多级缓存            | 性能      | 投入产出比最高，立竿见影降本提速        |
-| **P0** | 9.5 优雅关闭 + 健康检查 | 工程      | 上生产的前提条件                        |
-| **P0** | 11.2 PostgresSaver      | LangGraph | 当前 MemorySaver 重启丢状态，生产不可用 |
-| **P1** | 9.2 限流熔断            | 工程      | 保护下游服务不被打挂                    |
-| **P1** | 10.1 Map-Reduce 并行    | Agent     | 检索并行化，延迟减半                    |
-| **P1** | 11.1 astream_events     | LangGraph | 前端体验提升明显                        |
-| **P1** | 12.1 上下文压缩         | RAG       | 降本 + 提速                             |
-| **P2** | 10.2 Self-Reflection    | Agent     | 质量提升但增加延迟                      |
-| **P2** | 9.3 异步任务队列        | 工程      | 文档量大时才需要                        |
-| **P2** | 13.1 OpenTelemetry      | 工程      | 规模上来后才有价值                      |
-| **P3** | 9.4 连接池调优          | 性能      | 参数调整即可                            |
-| **P3** | 9.6 uvloop              | 性能      | Linux 部署时启用                        |
-| **P3** | 11.3 子图状态隔离       | LangGraph | 代码整洁度                              |
-| **P3** | 11.4 with_fallbacks     | LangChain | 容灾增强                                |
-| **P3** | 11.5 Custom Reducer     | LangGraph | 消息裁剪                                |
-| **P3** | 12.2 块顺序优化         | RAG       | 零成本提升                              |
-| **P3** | 12.3 批量 Embedding     | RAG       | 索引构建优化                            |
-| **P3** | 12.4 动态检索策略       | RAG       | 按需分配                                |
-| **P3** | 13.2 structlog          | 工程      | 结构化日志                              |
-| **P3** | 13.3 Docker 多阶段      | 工程      | 镜像优化                                |
-| **P3** | 13.4 CI/CD              | 工程      | 自动化                                  |
-| **P3** | 13.5 安全加固           | 工程      | 底线保障                                |
-| **P1** | 14.1 Pre/Post Hooks     | LangGraph | 法律场景护栏必备，拦截敏感输入/输出    |
-| **P2** | 14.2 Node Caching       | LangGraph | 意图识别节点缓存，省 LLM 调用          |
-| **P2** | 14.3 Cross-Thread Mem   | LangGraph | 跨会话记忆，用户体验提升               |
-| **P2** | 14.4 Delta Channels     | LangGraph | 长对话存储成本降 100x                 |
-| **P1** | 14.5 Typed Streaming    | LangGraph | 前端分阶段进度推送，体验提升明显       |
-| **P3** | 14.6 PTC                | LangGraph | 批量工具调用，省 token                |
-| **P3** | 14.7 Declarative HITL   | LangGraph | 声明式 HITL，代码侵入性低             |
-| **P3** | 14.8 Swarm/Hierarchical | Agent     | 多 Agent 拓扑扩展                     |
-| **P1** | 14.9 Recursion Limit    | LangGraph | 系统级防死循环，生产必备              |
-| **P2** | 14.10 Subgraph Stream   | LangGraph | 子图进度流式推送                       |
-| **P1** | 15.1 Agentic RAG 评分    | RAG       | 检索后评分+查询重写，质量门禁必备      |
-| **P1** | 15.2 流式工具校验        | Agent     | 拦截 94% 幻觉工具调用                  |
-| **P2** | 15.3 Hierarchical Teams  | Agent     | >10 工具时延迟降 40%                  |
-| **P3** | 15.4 Multi-Agent Debate  | Agent     | 事实一致性+40%，但成本翻倍             |
-| **P1** | 15.5 Send API Map-Reduce | LangGraph | 多路检索并行，延迟=sum→max            |
-| **P0** | 15.6 Checkpointer 选型   | LangGraph | 生产持久化，替代 MemorySaver          |
-| **P2** | 15.7 Langfuse 替代       | 可观测性  | 开源自部署，合规场景必备              |
-| **P3** | 15.8 Cluster 弹性伸缩    | 运维      | 千万级用户场景才需要                  |
-| **P3** | 15.9 Pydantic v3 校验    | 工程      | 运行时校验+序列化加速                  |
-| **P3** | 15.10 Prompt 模式库      | 工程      | prompt 集中管理+版本化                 |
+| 优先级       | 项目                     | 类型      | 理由                                    |
+| ------------ | ------------------------ | --------- | --------------------------------------- |
+| **P0** | 9.1 多级缓存             | 性能      | 投入产出比最高，立竿见影降本提速        |
+| **P0** | 9.5 优雅关闭 + 健康检查  | 工程      | 上生产的前提条件                        |
+| **P0** | 11.2 PostgresSaver       | LangGraph | 当前 MemorySaver 重启丢状态，生产不可用 |
+| **P1** | 9.2 限流熔断             | 工程      | 保护下游服务不被打挂                    |
+| **P1** | 10.1 Map-Reduce 并行     | Agent     | 检索并行化，延迟减半                    |
+| **P1** | 11.1 astream_events      | LangGraph | 前端体验提升明显                        |
+| **P1** | 12.1 上下文压缩          | RAG       | 降本 + 提速                             |
+| **P2** | 10.2 Self-Reflection     | Agent     | 质量提升但增加延迟                      |
+| **P2** | 9.3 异步任务队列         | 工程      | 文档量大时才需要                        |
+| **P2** | 13.1 OpenTelemetry       | 工程      | 规模上来后才有价值                      |
+| **P3** | 9.4 连接池调优           | 性能      | 参数调整即可                            |
+| **P3** | 9.6 uvloop               | 性能      | Linux 部署时启用                        |
+| **P3** | 11.3 子图状态隔离        | LangGraph | 代码整洁度                              |
+| **P3** | 11.4 with_fallbacks      | LangChain | 容灾增强                                |
+| **P3** | 11.5 Custom Reducer      | LangGraph | 消息裁剪                                |
+| **P3** | 12.2 块顺序优化          | RAG       | 零成本提升                              |
+| **P3** | 12.3 批量 Embedding      | RAG       | 索引构建优化                            |
+| **P3** | 12.4 动态检索策略        | RAG       | 按需分配                                |
+| **P3** | 13.2 structlog           | 工程      | 结构化日志                              |
+| **P3** | 13.3 Docker 多阶段       | 工程      | 镜像优化                                |
+| **P3** | 13.4 CI/CD               | 工程      | 自动化                                  |
+| **P3** | 13.5 安全加固            | 工程      | 底线保障                                |
+| **P1** | 14.1 Pre/Post Hooks      | LangGraph | 法律场景护栏必备，拦截敏感输入/输出     |
+| **P2** | 14.2 Node Caching        | LangGraph | 意图识别节点缓存，省 LLM 调用           |
+| **P2** | 14.3 Cross-Thread Mem    | LangGraph | 跨会话记忆，用户体验提升                |
+| **P2** | 14.4 Delta Channels      | LangGraph | 长对话存储成本降 100x                   |
+| **P1** | 14.5 Typed Streaming     | LangGraph | 前端分阶段进度推送，体验提升明显        |
+| **P3** | 14.6 PTC                 | LangGraph | 批量工具调用，省 token                  |
+| **P3** | 14.7 Declarative HITL    | LangGraph | 声明式 HITL，代码侵入性低               |
+| **P3** | 14.8 Swarm/Hierarchical  | Agent     | 多 Agent 拓扑扩展                       |
+| **P1** | 14.9 Recursion Limit     | LangGraph | 系统级防死循环，生产必备                |
+| **P2** | 14.10 Subgraph Stream    | LangGraph | 子图进度流式推送                        |
+| **P1** | 15.1 Agentic RAG 评分    | RAG       | 检索后评分+查询重写，质量门禁必备       |
+| **P1** | 15.2 流式工具校验        | Agent     | 拦截 94% 幻觉工具调用                   |
+| **P2** | 15.3 Hierarchical Teams  | Agent     | >10 工具时延迟降 40%                    |
+| **P3** | 15.4 Multi-Agent Debate  | Agent     | 事实一致性+40%，但成本翻倍              |
+| **P1** | 15.5 Send API Map-Reduce | LangGraph | 多路检索并行，延迟=sum→max             |
+| **P0** | 15.6 Checkpointer 选型   | LangGraph | 生产持久化，替代 MemorySaver            |
+| **P2** | 15.7 Langfuse 替代       | 可观测性  | 开源自部署，合规场景必备                |
+| **P3** | 15.8 Cluster 弹性伸缩    | 运维      | 千万级用户场景才需要                    |
+| **P3** | 15.9 Pydantic v3 校验    | 工程      | 运行时校验+序列化加速                   |
+| **P3** | 15.10 Prompt 模式库      | 工程      | prompt 集中管理+版本化                  |

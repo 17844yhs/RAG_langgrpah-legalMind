@@ -197,7 +197,9 @@ def build_retrieval_subgraph():
 
     # 边
     graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", "end": "finish"})
+    # tools_condition 返回 "tools" 或 END（"__end__"）——映射键必须与返回值精确匹配，
+    # 否则 LLM 不调工具直接回答时会 KeyError: '__end__'
+    graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", "__end__": "finish"})
     graph.add_edge("tools", "evaluate")
     graph.add_conditional_edges("evaluate", evaluate_route)
     graph.add_edge("finish", END)

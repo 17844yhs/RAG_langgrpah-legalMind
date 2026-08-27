@@ -67,6 +67,10 @@ export const useChatStore = defineStore('chat', () => {
       if (chunk.sources) {
         messages.value[aiIdx].sources = chunk.sources
       }
+      // 回答元数据（结论/风险等级/法条）— 流结束后到达，渲染为答案卡片
+      if (chunk.meta) {
+        messages.value[aiIdx].meta = chunk.meta
+      }
       if (chunk.session_id) {
         currentSessionId.value = chunk.session_id
         if (!sessions.value.find((s) => s.session_id === chunk.session_id)) {

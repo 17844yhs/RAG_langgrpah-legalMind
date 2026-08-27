@@ -1,10 +1,14 @@
 """Human-in-the-Loop 管理 — 管理所有需要人工介入的节点"""
+import logging
+
 from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage, AIMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.llm.model_client import get_llm
 from app.llm.prompts import INFO_GATHERING_PROMPT
+
+logger = logging.getLogger("app.agent")
 
 
 # ── HITL #1：意图确认（一次性）──
@@ -48,8 +52,11 @@ async def check_intent(state):
 
 class InfoCheckResult(BaseModel):
     """LLM 信息充分性判断结果"""
-    sufficient: bool   # 信息是否充分
-    question: str      # 不充分时的追问问题（充分时为空）
+    sufficient: bool = Field(description="当前信息是否足以回答用户问题")
+    question: str = Field(
+        default="",
+        description="信息不足时的追问问题；信息充分时留空",
+    )
 
 
 MAX_CLARIFY_ROUNDS = 3  # 最多追问 3 轮，防止死循环
@@ -72,7 +79,12 @@ async def info_gathering(state):
         return {"info_sufficient": True}
 
     # LLM 判断信息充分性 + 生成追问（一次调用完成两件事）
-    llm = get_llm().with_structured_output(InfoCheckResult, method="function_calling")
+    # with_retry：格式不合规/网络抖动等瞬时失败重试一次
+    llm = (
+        get_llm()
+        .with_structured_output(InfoCheckResult, method="function_calling")
+        .with_retry(stop_after_attempt=2)
+    )
 
     # 构建对话历史文本（含追问和用户回答，保持完整上下文）
     history = "\n".join([
@@ -80,11 +92,20 @@ async def info_gathering(state):
         for m in state.get("messages", [])
     ])
 
-    result = await llm.ainvoke(INFO_GATHERING_PROMPT.format(
-        intent=state.get("intent", "qa"),
-        query=state.get("query", ""),
-        history=history,
-    ))
+    try:
+        result = await llm.ainvoke(INFO_GATHERING_PROMPT.format(
+            intent=state.get("intent", "qa"),
+            query=state.get("query", ""),
+            history=history,
+        ))
+        # function_calling 模式下模型拒答会返回 None 而非抛异常
+        if result is None:
+            raise ValueError("structured output returned None")
+    except Exception:
+        # 降级：充分性判断是"增强体验"而非"关键路径"，
+        # 判断失败不应阻塞回答——直接放行，宁可少追问一轮
+        logger.exception("信息充分性判断失败，降级放行")
+        return {"info_sufficient": True}
 
     # 信息充分 → 放行
     if result.sufficient:

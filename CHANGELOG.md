@@ -12,11 +12,14 @@
 - **🚨 统一异常处理 + 错误码（RFC 9457 Problem Details）**：新增 `backend/app/exceptions/` 包，错误码注册表（`SYS_/AUTH_/CHAT_/CASE_/RAG_` 前缀）+ 业务异常基类（`AppException` 及领域子类）+ 全局异常处理器，所有错误响应统一为 `application/problem+json` 格式（`type/title/status/detail/instance` 标准字段 + `code/traceId` 扩展字段）
 - **🔍 TraceId 全链路排查**：纯 ASGI 中间件为每个请求生成/透传 traceId（请求日志 + 响应头 `X-Request-ID` + 错误体三处携带），未捕获异常堆栈只进日志、对外只回 traceId
 - **📡 SSE 错误通道**：流式端点（chat/stream、chat/resume、documents/generate/stream）错误以约定 `error` 事件传递（code + detail + traceId）
+- **📐 Structured Output 元数据抽取（LegalAnswerMeta）**：QA 主链路落地"流式 + 结构化"混合方案——正文保持逐 token 流式（打字机效果），流结束后一次轻量结构化调用抽取结论/风险等级/引用法条，经 `meta` SSE 事件送达前端渲染答案卡片（风险配色 + 法条标签 + 一句话结论）。规避 `with_structured_output` 与流式输出的本质互斥（JSON 完整性 vs token 流）
+- **🛡️ 结构化输出生产加固**：意图识别/信息充分性判断两处补齐容错——`.with_retry` 瞬时失败重试；意图识别失败降级为低置信度 qa 自动触发 HITL 澄清（失败走进人机协作而非报错）；防御 function_calling 模式拒答返回 `None` 的坑
 
 ### 修复
 
 - **SSE 流信息泄漏**：原来把原始异常字符串 `{e}` 直接吐给用户（可能含 DB 连接串、模型路径），改为固定文案 + traceId
 - **错误响应格式不一致**：裸 `HTTPException`（`{detail}`）、FastAPI 默认 422、框架 404 三种结构并存，前端无法统一处理
+- **检索子图路由 KeyError**：`tools_condition` 映射键 `"end"` 应为 `"__end__"`，LLM 不调工具直接回答时崩溃 500（正常流程从不触发，多轮 interrupt/resume 后才暴露）
 
 ### 变更
 
