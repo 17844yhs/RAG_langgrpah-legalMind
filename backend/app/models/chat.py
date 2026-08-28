@@ -22,3 +22,6 @@ class ChatMessageRecord(Model):
 
     class Meta:
         table = "chat_messages"
+        # 历史消息查询：WHERE chat_session_id = ? ORDER BY created_at
+        # PostgreSQL 的 FK 列不自动建索引，复合索引让该查询走 index scan 免排序
+        indexes = [("chat_session_id", "created_at")]
