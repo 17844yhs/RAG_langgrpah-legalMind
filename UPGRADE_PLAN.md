@@ -630,7 +630,9 @@ class QAAgent:
 
 ---
 
-### 6.4 Custom Callbacks — Token 成本追踪（2 小时）
+### 6.4 Custom Callbacks — Token 成本追踪（2 小时）✅
+
+> 落地记录：采集层（`BaseCallbackHandler` + ContextVar 桥接 traceId + 单价成本估算）+ 全链路用量呈现（SSE `usage` 事件 → `usage JSONB` 落库 → 前端展示）均已完成（见 优化项目.md 10.6）；配额/计费 API 与用量统计页为可选扩展层，未做。
 
 **业务背景**：法律问答单次对话可能消耗数千 token，GPT-4 成本不可忽视。需要实时追踪每次对话的 token 消耗和成本，支持按用户/会话维度统计和预算控制。
 

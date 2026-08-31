@@ -22,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.exceptions.base import AppException
 from app.exceptions.codes import ErrorCode
+from app.llm.usage_tracker import RequestUsage, trace_id_var, usage_var
 
 logger = logging.getLogger("app.error")
 
@@ -155,6 +156,12 @@ class TraceIdMiddleware:
 
         # 写入 scope.state，后续 request.state.trace_id 可直接读
         scope.setdefault("state", {})["trace_id"] = trace_id
+        # 同时写入 ContextVar：langchain 回调（TokenUsageHandler）在
+        # asyncio 同一调用链内可直接读到，与 scope 无关
+        trace_id_var.set(trace_id)
+        # 请求级 token 累计器：handler 在 on_llm_end 里累加，SSE 结束时随
+        # usage 事件发给前端；非 LLM 请求为 0 调用，无副作用
+        usage_var.set(RequestUsage())
 
         start = time.perf_counter()
         status_code = 0

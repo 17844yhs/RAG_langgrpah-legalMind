@@ -101,6 +101,17 @@ const riskStyle = computed(() => {
             </div>
           </details>
         </div>
+
+        <!-- token 消耗（每次对话的 LLM 用量，流结束/interrupt 时随 usage 事件到达） -->
+        <div
+          v-if="message.usage && message.usage.total_tokens"
+          class="px-1 text-[11px]"
+          :style="{ color: 'var(--text-secondary)' }"
+        >
+          消耗 {{ message.usage.total_tokens }} tokens
+          （输入 {{ message.usage.input_tokens }} / 输出 {{ message.usage.output_tokens }}
+          · {{ message.usage.calls }} 次调用）
+        </div>
       </div>
     </div>
   </div>

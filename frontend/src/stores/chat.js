@@ -71,6 +71,10 @@ export const useChatStore = defineStore('chat', () => {
       if (chunk.meta) {
         messages.value[aiIdx].meta = chunk.meta
       }
+      // token 消耗（本请求所有 LLM 调用归集，interrupt 打断的对话也会发）
+      if (chunk.usage) {
+        messages.value[aiIdx].usage = chunk.usage
+      }
       if (chunk.session_id) {
         currentSessionId.value = chunk.session_id
         if (!sessions.value.find((s) => s.session_id === chunk.session_id)) {

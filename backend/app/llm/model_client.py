@@ -22,8 +22,10 @@ from langchain_deepseek import ChatDeepSeek
 from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
 
 from app.config import settings
+from app.llm.usage_tracker import TokenUsageHandler
 
 _llm = None
+_usage_handler = TokenUsageHandler()
 # 非线程安全,单线程应用（FastAPI 单进程）可用;多线程无参函数用functools.lru_cache
 def get_llm():
     global _llm
@@ -50,9 +52,12 @@ def _init_llm():
     def _make(provider: str):
         if provider == "deepseek":
             # V4 Flash 默认开启思考模式，但思考模式不支持 tool_choice，需手动关闭
+            # callbacks= 构造参数挂载 TokenUsageHandler：实例保持 BaseChatModel，
+            # with_structured_output / bind_tools 方法代理不受影响
             return ChatDeepSeek(model=settings.LLM_MODEL, api_key=settings.LLM_API_KEY,
                               base_url=settings.LLM_API_BASE,
                               extra_body={"thinking": {"type": "disabled"}},
+                              callbacks=[_usage_handler],
                               **common)
         elif provider == "openai":
             return ChatOpenAI(model=settings.LLM_MODEL, openai_api_key=settings.LLM_API_KEY, **common)

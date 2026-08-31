@@ -18,6 +18,7 @@ class ChatMessageRecord(Model):
     role = fields.CharField(max_length=20, description="消息角色（user/assistant）")
     content = fields.TextField(description="消息内容")
     meta = fields.JSONField(null=True, description="回答元数据（summary/risk_level/applicable_laws，仅 assistant 消息）")
+    usage = fields.JSONField(null=True, description="LLM token 消耗（input/output/total_tokens + calls，仅 assistant 消息）")
     created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
 
     class Meta:

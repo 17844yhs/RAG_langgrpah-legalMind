@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.agents.workflow import workflow
 from app.dependencies import get_current_user
 from app.exceptions import AppException, ChatError, ErrorCode, sse_error_event
+from app.llm.usage_tracker import usage_var
 from app.models.chat import ChatSession, ChatMessageRecord
 from app.models.user import User
 
@@ -55,14 +56,16 @@ async def _ensure_session(session_id: str, user_obj: User) -> ChatSession:
     return session
 
 
-async def _record_messages(session: ChatSession, user_msg: str, assistant_msg: str, meta: dict = None) -> None:
+async def _record_messages(session: ChatSession, user_msg: str, assistant_msg: str,
+                           meta: dict = None, usage: dict = None) -> None:
     """把一轮对话写入 ChatMessageRecord，供侧边栏 UI 读取。
 
     meta：assistant 消息的结构化元数据（summary/risk_level/applicable_laws），
-    持久化后刷新页面/加载历史会话时卡片不丢失。
+    usage：本轮 LLM token 消耗（input/output/total/calls），持久化后刷新页面不丢失。
     """
     await ChatMessageRecord.create(chat_session=session, role="user", content=user_msg)
-    await ChatMessageRecord.create(chat_session=session, role="assistant", content=assistant_msg, meta=meta)
+    await ChatMessageRecord.create(chat_session=session, role="assistant",
+                                   content=assistant_msg, meta=meta, usage=usage)
 
 
 async def _check_interrupt(session_id: str) -> Optional[dict]:
@@ -91,9 +94,11 @@ async def _finalize_stream(session, query, full_text, session_id):
         if fallback:
             full_text = fallback
             yield f"data: {json.dumps({'content': fallback}, ensure_ascii=False)}\n\n"
-    # 写入侧边栏记录（连同元数据一起持久化）
+    # 写入侧边栏记录（连同元数据、token 消耗一起持久化）
+    req_usage = usage_var.get()
+    usage = req_usage.to_dict() if req_usage else None
     if full_text:
-        await _record_messages(session, query, full_text, values.get("answer_meta"))
+        await _record_messages(session, query, full_text, values.get("answer_meta"), usage)
     # 发送回答元数据（结构化输出抽取的结论/风险等级/法条）
     meta = values.get("answer_meta")
     if meta:
@@ -102,6 +107,9 @@ async def _finalize_stream(session, query, full_text, session_id):
     sources = values.get("sources") or []
     if sources:
         yield f"data: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n"
+    # 发送 token 消耗（本请求内所有 LLM 调用自动归集）
+    if usage and usage.get("calls"):
+        yield f"data: {json.dumps({'usage': usage}, ensure_ascii=False)}\n\n"
 
 #  路由 
 @router.post("/send", response_model=ChatResponse)
@@ -148,7 +156,11 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user), h
             interrupt_data = await _check_interrupt(session_id)
             if interrupt_data:
                 # 被打断：发送 interrupt 事件给前端，等待用户交互
+                # （token 已消耗，照发 usage 事件）
                 yield f"data: {json.dumps({'interrupt': interrupt_data}, ensure_ascii=False)}\n\n"
+                req_usage = usage_var.get()
+                if req_usage and req_usage.calls:
+                    yield f"data: {json.dumps({'usage': req_usage.to_dict()}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
@@ -193,10 +205,13 @@ async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_us
                     full_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
 
-            #  resume 后再次检查 interrupt（可能触发第二个 HITL 节点） 
+            #  resume 后再次检查 interrupt（可能触发第二个 HITL 节点）
             interrupt_data = await _check_interrupt(request.session_id)
             if interrupt_data:
                 yield f"data: {json.dumps({'interrupt': interrupt_data}, ensure_ascii=False)}\n\n"
+                req_usage = usage_var.get()
+                if req_usage and req_usage.calls:
+                    yield f"data: {json.dumps({'usage': req_usage.to_dict()}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
@@ -249,7 +264,7 @@ async def get_session_messages(session_id: str, user=Depends(get_current_user), 
     session = await _get_owned_session(session_id, user)
     messages = await ChatMessageRecord.filter(chat_session=session).order_by("created_at").limit(limit)
     return {"messages": [
-        {"role": m.role, "content": m.content, "meta": m.meta}
+        {"role": m.role, "content": m.content, "meta": m.meta, "usage": m.usage}
         for m in messages
     ]}
 

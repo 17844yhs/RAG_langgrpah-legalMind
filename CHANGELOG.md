@@ -9,6 +9,8 @@
 
 ### 新增
 
+- **💰 Token 成本追踪（Custom Callbacks）**：`BaseCallbackHandler.on_llm_end` 采集每次 LLM 调用的用量 → 带 traceId 结构化日志（模型名/in/out/total/成本估算/延迟）；ContextVar 桥接纯 ASGI 中间件的 traceId；挂载在模型构造参数，方法代理零影响
+- **📊 Token 用量全链路呈现**：请求级累计器（`RequestUsage` + ContextVar，一次请求所有 LLM 调用自动归集）→ SSE `usage` 事件（interrupt 打断的对话同样照发）→ `chat_messages.usage JSONB` 落库（迁移 `0003_add_message_usage`）→ 前端消息下方展示"消耗 N tokens（输入/输出/调用次数）"。E2E 验证 SSE/DB/API 三处数据一致
 - **🛡️ LLM Fallback 容灾链（with_fallbacks）**：主/备 DeepSeek 双实例容灾，6 类网络/限流异常显式配全；对 `bind_tools` / `with_structured_output` 透明；流式 astream 在首个 chunk 前失败自动切换。规则兜底由应用层降级体系承担（intent 降级 HITL / SSE error 事件）
 - **⚡ 混合检索并行化（asyncio.gather）**：BM25（扔线程池）与向量检索并行执行，延迟 sum→max（实测单次检索 ~15ms）；Chroma 过滤下推改用 `asimilarity_search`，同步调用不再阻塞事件循环
 - **🔥 修复检索链路 3 个既有性能 bug**（API 层验证时暴露）：① `RetrievalAgent()` 在 5 处调用点请求级实例化 → 每次重新加载 568M cross-encoder 模型，新增 `get_retrieval_agent()` 进程级单例；② `CrossEncoder.predict()` 同步阻塞事件循环 → 扔 `asyncio.to_thread`；③ rerank 全长推理（默认 8192 上下文）→ `max_length=256` + 前缀截断。`GET /api/cases/search` 稳态延迟 20s+ → 9.3s
