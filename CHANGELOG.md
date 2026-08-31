@@ -9,6 +9,7 @@
 
 ### 新增
 
+- **🛡️ LLM Fallback 容灾链（with_fallbacks）**：主/备 DeepSeek 双实例容灾，6 类网络/限流异常显式配全；对 `bind_tools` / `with_structured_output` 透明；流式 astream 在首个 chunk 前失败自动切换。规则兜底由应用层降级体系承担（intent 降级 HITL / SSE error 事件）
 - **⚡ 混合检索并行化（asyncio.gather）**：BM25（扔线程池）与向量检索并行执行，延迟 sum→max（实测单次检索 ~15ms）；Chroma 过滤下推改用 `asimilarity_search`，同步调用不再阻塞事件循环
 - **🔥 修复检索链路 3 个既有性能 bug**（API 层验证时暴露）：① `RetrievalAgent()` 在 5 处调用点请求级实例化 → 每次重新加载 568M cross-encoder 模型，新增 `get_retrieval_agent()` 进程级单例；② `CrossEncoder.predict()` 同步阻塞事件循环 → 扔 `asyncio.to_thread`；③ rerank 全长推理（默认 8192 上下文）→ `max_length=256` + 前缀截断。`GET /api/cases/search` 稳态延迟 20s+ → 9.3s
 - **🚨 统一异常处理 + 错误码（RFC 9457 Problem Details）**：新增 `backend/app/exceptions/` 包，错误码注册表（`SYS_/AUTH_/CHAT_/CASE_/RAG_` 前缀）+ 业务异常基类（`AppException` 及领域子类）+ 全局异常处理器，所有错误响应统一为 `application/problem+json` 格式（`type/title/status/detail/instance` 标准字段 + `code/traceId` 扩展字段）

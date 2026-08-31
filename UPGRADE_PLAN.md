@@ -415,7 +415,9 @@ intent_recognition → check_intent → info_gathering ──→ router → ...
 
 ---
 
-### 6.1 Structured Output — `with_structured_output`（2 小时）⭐ 最推荐
+### 6.1 Structured Output — `with_structured_output`（2 小时）⭐ 最推荐 ✅
+
+> 落地记录：IntentResult/InfoCheckResult 生产加固（重试+降级 HITL）+ LegalAnswerMeta 元数据抽取（流式正文 + 流后抽取混合方案），详见 优化项目.md 12.10。
 
 **业务背景**：法律场景对输出格式有严格要求——回答必须附带法条编号、引用案例、风险等级。自由文本输出无法保证下游解析（前端展示、审计归档）的可靠性。`with_structured_output` 让 LLM 强制按 Pydantic Schema 返回结构化 JSON，开发阶段即完成格式约束，无需后处理正则匹配。
 
@@ -471,7 +473,9 @@ class QAAgent:
 
 ---
 
-### 6.2 LangGraph Send API — 并行 Map-Reduce 专家分发（1 天）⭐⭐ 区分度最高
+### 6.2 LangGraph Send API — 并行 Map-Reduce 专家分发（1 天）⭐⭐ 区分度最高 ✅
+
+> 落地记录：固定两路（BM25+向量）已用 `asyncio.gather` 实现并行 Map-Reduce（延迟 sum→max，见 优化项目.md 9.1）；Send API 本体适用于运行时才确定路数的动态 fan-out（多专家分发），预留 15.3 场景。
 
 **业务背景**：用户上传一份合同，期望从多个法律维度并行审查——劳动争议条款、知识产权归属、违约赔偿限额。串行调用（先查劳动法 → 再查知识产权 → 再查合同法）耗时长且各维度互不依赖，天然适合并行。LangGraph 的 `Send` API 允许在同一图中动态生成 N 个并行分支，完成后汇聚到综合节点。
 
@@ -567,7 +571,9 @@ synthesize ← 汇聚 3 个专家结果
 
 ---
 
-### 6.3 Fallback 链 — `with_fallbacks`（2 小时）
+### 6.3 Fallback 链 — `with_fallbacks`（2 小时）✅
+
+> 落地记录：主/备 DeepSeek 双实例 + 6 类网络/限流异常显式配全，对 bind_tools/with_structured_output 透明；三个实现坑（异常名单漏配静默失效、链尾 Lambda 炸结构化代理、流式必须 astream）详见 优化项目.md 10.4。
 
 **业务背景**：生产环境中 LLM API 会出现超时、限流、模型不可用等情况。法律问答系统不能在用户等待时直接报错——需要自动降级到备用模型。Fallback 链提供声明式的容灾机制。
 
@@ -847,7 +853,7 @@ def _sse(data: dict) -> str:
 
 ### 8.1 后端性能优化
 
-#### 8.1.1 Reranker 同步阻塞事件循环 【高优先级】
+#### 8.1.1 Reranker 同步阻塞事件循环 【高优先级】✅ 已修复（predict 扔 asyncio.to_thread）
 
 **问题**：`reranker.py` 的 `rerank()` 是 `async def`，但内部 `self._model.predict(pairs)` 是 PyTorch CPU 推理，属于**同步阻塞调用**。FastAPI 的异步事件循环会被卡住，期间无法处理其他请求。
 
@@ -862,13 +868,13 @@ import asyncio
 scores = await asyncio.to_thread(self._model.predict, pairs)
 ```
 
-#### 8.1.2 BM25 检索同步阻塞 【高优先级】
+#### 8.1.2 BM25 检索同步阻塞 【高优先级】✅ 已修复（invoke 扔 asyncio.to_thread，并与向量检索 gather 并行）
 
 **问题**：`retriever.py` 中 `self.bm25_retriever.invoke(query)` 也是同步调用，在 async `retrieve()` 中直接执行，同样阻塞事件循环。
 
 **修法**：`bm25_docs = await asyncio.to_thread(self.bm25_retriever.invoke, query)`
 
-#### 8.1.3 HybridRetriever 每次实例化都全量加载 【中优先级】
+#### 8.1.3 HybridRetriever 每次实例化都全量加载 【中优先级】✅ 已修复（get_retrieval_agent() 进程级单例，5 处调用点改用）
 
 **问题**：`RetrievalAgent.__init__` 每次都 `HybridRetriever()`，其 `_init_bm25_from_store()` 会从 ChromaDB 全量加载所有文档到内存。如果 `search_cases` Tool 在 ReAct 循环里被调用多次，每次都创建新的 `RetrievalAgent` → 重复加载。
 
@@ -876,7 +882,7 @@ scores = await asyncio.to_thread(self._model.predict, pairs)
 
 **修法**：把 `HybridRetriever` 改为模块级单例，类似 `get_llm()` 的模式。
 
-#### 8.1.4 向量检索和 BM25 可并行 【中优先级】
+#### 8.1.4 向量检索和 BM25 可并行 【中优先级】✅ 已实现（gather + to_thread，实测检索 ~15ms，见 优化项目.md 9.1）
 
 **问题**：`retrieve()` 中向量检索和 BM25 检索是串行的，但两者互不依赖。
 
@@ -891,7 +897,7 @@ vector_docs, bm25_docs = await asyncio.gather(
 )
 ```
 
-#### 8.1.5 文书生成未走流式 【低优先级】
+#### 8.1.5 文书生成未走流式 【低优先级】✅ 已实现（/documents/generate/stream 端点 + astream_generate 逐 chunk 推送）
 
 **问题**：`document_agent.py` 有 `astream_generate()` 方法，但 `workflow.py:_document_node` 调用的是非流式的 `generate()`，用户要等到完整生成才能看到结果。
 
@@ -1363,7 +1369,9 @@ def evaluate_node(state):
 
 ---
 
-### 11.4 with_fallbacks 容灾链
+### 11.4 with_fallbacks 容灾链 ✅
+
+> 落地记录：见 6.3 与 优化项目.md 10.4。
 
 **通用概念**：主系统 → 备用系统 → 兜底方案，逐级降级。
 
