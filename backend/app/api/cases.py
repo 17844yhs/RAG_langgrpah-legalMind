@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import List, Optional
 
-from app.agents.retrieval_agent import RetrievalAgent
+from app.agents.retrieval_agent import get_retrieval_agent
 from app.services.case_service import CaseService
 from app.exceptions import CaseError, ErrorCode, RAGError
 
@@ -42,7 +42,7 @@ async def search_cases_get(
     if case_type:
         filters["case_type"]= case_type
     
-    agent = RetrievalAgent()
+    agent = get_retrieval_agent()
     try:
         results = await agent.retrieve(
             query=q,

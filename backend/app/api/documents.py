@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import Dict, List
 
 from app.agents.document_agent import DocumentAgent
-from app.agents.retrieval_agent import RetrievalAgent
+from app.agents.retrieval_agent import get_retrieval_agent
 from app.dependencies import get_current_user
 from app.exceptions import AppException, sse_error_event
 
@@ -35,7 +35,7 @@ class DocumentGenerateResponse(BaseModel):
 async def generate_document(request: DocumentGenerateRequest, user=Depends(get_current_user)):
     """生成法律文书（非流式）"""
     agent = DocumentAgent()
-    retrieval_agent = RetrievalAgent()
+    retrieval_agent = get_retrieval_agent()
 
     references = []
     if request.use_references:
@@ -65,7 +65,7 @@ async def generate_document_stream(request: DocumentGenerateRequest, user=Depend
     async def generate():
         try:
             agent = DocumentAgent()
-            retrieval_agent = RetrievalAgent()
+            retrieval_agent = get_retrieval_agent()
 
             references = []
             if request.use_references:

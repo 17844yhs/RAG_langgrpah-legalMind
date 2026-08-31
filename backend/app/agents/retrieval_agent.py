@@ -21,7 +21,12 @@ from app.tools.search_tool import search_cases
 
 # 底层检索 Agent（被 search_cases Tool 内部调用）
 class RetrievalAgent:
-    """案例检索 Agent — 封装 HybridRetriever + Reranker"""
+    """案例检索 Agent — 封装 HybridRetriever + Reranker
+
+    通过 get_retrieval_agent() 获取进程级单例使用。
+    直接实例化会在每次请求时重新加载 cross-encoder 模型（秒级开销）
+    和 BM25 索引，严禁在请求路径上 new。
+    """
     def __init__(self):
         self.retriever = HybridRetriever()
         self.reranker = Reranker() if settings.RERANK_ENABLED else None
@@ -70,6 +75,17 @@ class RetrievalAgent:
         """按法条检索"""
         filters = {"laws": {"$contains": article}}
         return await self.retrieve(article, top_k, filters)
+
+
+# 进程级单例：cross-encoder 模型 + BM25 索引只加载一次
+_retrieval_agent: "RetrievalAgent | None" = None
+
+
+def get_retrieval_agent() -> "RetrievalAgent":
+    global _retrieval_agent
+    if _retrieval_agent is None:
+        _retrieval_agent = RetrievalAgent()
+    return _retrieval_agent
 
 
 # ReAct 检索子图

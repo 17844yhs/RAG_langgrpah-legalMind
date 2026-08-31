@@ -3,9 +3,16 @@
 使用 BAAI/bge-reranker-v2-m3 做 query-document 语义相关性评分，
 替代原来的关键词重叠计数。
 
+性能设计（CPU 推理 ~20s → ~2-4s）：
+- max_length=256：相关性判断只需看段落开头，bge-reranker-v2-m3 默认
+  8192 上下文会让 1000 字 chunk 全长推理，白白慢 3-4 倍
+- predict 是同步 CPU 密集调用，扔线程池执行——不阻塞事件循环，
+  期间同一进程的其他请求正常服务
+
 注：langchain.retrievers 模块在 LangChain 1.3.9 中已移除，
     改用 sentence_transformers.CrossEncoder 直接调用。
 """
+import asyncio
 import os
 from typing import List, Dict
 
@@ -15,25 +22,29 @@ _LOCAL_MODEL_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models"
 )
 
+# rerank 输入截断：查询 + 文档前缀足够做相关性判断
+_MAX_DOC_CHARS = 400
+_MAX_SEQ_LEN = 256
+
 
 def _load_reranker_model(model_name: str) -> CrossEncoder:
     """加载 Reranker 模型：本地缓存 → ModelScope → HuggingFace"""
     # 1. 检查 ModelScope 本地缓存
     local_dir = os.path.join(_LOCAL_MODEL_DIR, model_name.replace("/", "--"))
     if os.path.isdir(local_dir):
-        return CrossEncoder(local_dir)
+        return CrossEncoder(local_dir, max_length=_MAX_SEQ_LEN)
 
     # 2. 从 ModelScope 下载
     try:
         from modelscope import snapshot_download
         print(f"  从 ModelScope 下载 reranker: {model_name} ...")
         snapshot_download(model_name, local_dir=local_dir)
-        return CrossEncoder(local_dir)
+        return CrossEncoder(local_dir, max_length=_MAX_SEQ_LEN)
     except ImportError:
         pass
 
     # 3. 回退到 HuggingFace（可能需要翻墙）
-    return CrossEncoder(model_name)
+    return CrossEncoder(model_name, max_length=_MAX_SEQ_LEN)
 
 
 class Reranker:
@@ -55,14 +66,14 @@ class Reranker:
         if not documents:
             return []
 
-        # 构建 [query, document] 对
+        # 构建 [query, document] 对（文档截断前缀，配合 max_length=256 控制推理开销）
         pairs = [
-            [query, f"{doc.get('title', '')}\n{doc.get('content', doc.get('summary', ''))}"]
+            [query, f"{doc.get('title', '')}\n{doc.get('content', doc.get('summary', ''))}"[:_MAX_DOC_CHARS]]
             for doc in documents
         ]
 
-        # CrossEncoder 打分
-        scores = self._model.predict(pairs)
+        # CrossEncoder 打分 — 同步 CPU 密集调用扔线程池，不阻塞事件循环
+        scores = await asyncio.to_thread(self._model.predict, pairs)
 
         # 按分数降序排列
         scored = sorted(

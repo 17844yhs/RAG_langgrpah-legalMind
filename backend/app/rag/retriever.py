@@ -1,4 +1,14 @@
-"""混合检索器 — RRF 融合向量检索和 BM25 关键词检索"""
+"""混合检索器 — RRF 融合向量检索和 BM25 关键词检索
+
+并行策略：向量检索（asyncio 原生）与 BM25（同步计算扔线程池）通过
+asyncio.gather 并行执行，总耗时 = max(两路) 而非 sum(两路)；
+所有阻塞调用（Chroma 同步 API、BM25）均不占用事件循环线程，
+高并发下不会拖慢同一进程内的其他请求。
+
+选型说明：固定两路用 gather 即可；LangGraph Send API 适用于
+运行时才能确定路数的动态 fan-out（如按专业领域分发到 N 个子 Agent）。
+"""
+import asyncio
 import os
 import pickle
 import logging
@@ -149,9 +159,25 @@ class HybridRetriever:
                     return False
         return True
 
+    async def _vector_search(self, query: str, filters: Optional[Dict] = None) -> List[Document]:
+        """向量检索 — 简单等值过滤下推到 Chroma，复杂过滤走后置兜底
+
+        全部走异步 API（asimilarity_search 内部把同步 Chroma 调用扔线程池），
+        embedding 推理 + 库查询期间事件循环可服务其他请求。
+        """
+        if filters and self._is_simple_filter(filters):
+            try:
+                return await self.vector_store.asimilarity_search(
+                    query, k=settings.RAG_TOP_K * 2, filter=filters
+                )
+            except Exception:
+                pass  # 下推失败（字段类型不支持等）→ 退回无过滤检索，交后置兜底
+        return await self.vector_retriever.ainvoke(query)
+
     async def retrieve(self, query: str, top_k: int = 10, filters: Optional[Dict] = None) -> List[Dict]:
         """
-        混合检索（RRF 融合）
+        混合检索（RRF 融合，两路并行）
+
         Args:
             query: 查询文本
             top_k: 返回数量
@@ -159,22 +185,16 @@ class HybridRetriever:
         Returns:
             检索结果列表
         """
-        # 向量检索 — 简单等值过滤下推到向量库，复杂过滤走后置兜底
-        vector_docs = []
-        if filters and self._is_simple_filter(filters):
-            try:
-                vector_docs = self.vector_store.similarity_search(
-                    query, k=settings.RAG_TOP_K * 2, filter=filters
-                )
-            except Exception:
-                vector_docs = await self.vector_retriever.ainvoke(query)
-        else:
-            vector_docs = await self.vector_retriever.ainvoke(query)
-
-        # BM25 检索
-        bm25_docs = []
+        # 两路并行：gather 等待全部完成，总耗时 = max(向量, BM25) 而非 sum
+        # BM25 的 invoke 是纯同步 CPU 计算（rank_bm25 内存索引），扔线程池
+        # 执行——既不阻塞事件循环，又与向量检索的 IO 等待时间重叠
+        vector_coro = self._vector_search(query, filters)
         if self.bm25_retriever:
-            bm25_docs = self.bm25_retriever.invoke(query)
+            bm25_coro = asyncio.to_thread(self.bm25_retriever.invoke, query)
+            vector_docs, bm25_docs = await asyncio.gather(vector_coro, bm25_coro)
+        else:
+            vector_docs = await vector_coro
+            bm25_docs = []
 
         # RRF 融合排序（BM25 权重 0.4，向量权重 0.6）
         if bm25_docs:

@@ -57,8 +57,8 @@ class CaseSearchInput(BaseModel):
 )
 async def _do_retrieval(query: str, filters: dict, top_k: int) -> list:
     """实际检索执行，tenacity 对连接类错误自动重试"""
-    from app.agents.retrieval_agent import RetrievalAgent
-    agent = RetrievalAgent()
+    from app.agents.retrieval_agent import get_retrieval_agent
+    agent = get_retrieval_agent()
     return await agent.retrieve(query=query, top_k=top_k, filters=filters or None)
 
 
