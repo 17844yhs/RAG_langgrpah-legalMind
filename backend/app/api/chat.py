@@ -146,7 +146,12 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user), h
             # 先发 session_id，前端新会话需要用它来 resume
             yield f"data: {json.dumps({'session_id': session_id}, ensure_ascii=False)}\n\n"
 
-            async for chunk, metadata in workflow.astream(query=query, thread_id=session_id):
+            async for event in workflow.astream(query=query, thread_id=session_id):
+                if event["type"] == "stage":
+                    # 阶段进度事件（意图/检索/生成），前端渲染为进度提示
+                    yield f"data: {json.dumps({'stage': event['stage']}, ensure_ascii=False)}\n\n"
+                    continue
+                chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
                 if node == "qa_generation" and chunk.content:
                     full_text += chunk.content
@@ -196,10 +201,14 @@ async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_us
     async def generate():
         full_text = ""
         try:
-            async for chunk, metadata in workflow.astream_resume(
+            async for event in workflow.astream_resume(
                 thread_id=request.session_id,
                 user_response=request.response,
             ):
+                if event["type"] == "stage":
+                    yield f"data: {json.dumps({'stage': event['stage']}, ensure_ascii=False)}\n\n"
+                    continue
+                chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
                 if node == "qa_generation" and chunk.content:
                     full_text += chunk.content

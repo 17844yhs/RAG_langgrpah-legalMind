@@ -169,28 +169,87 @@ class LegalMindWorkflow:
         return result
 
     async def astream(self, query: str, thread_id: str):
-        """正常流程：发送新消息并流式返回"""
+        """正常流程：发送新消息，流式返回 token + 阶段进度事件"""
         config = {"configurable": {"thread_id": thread_id}}
         init_state = {
             "query": query,
             "messages": [HumanMessage(content=query)],
         }
-        async for chunk, metadata in self.get_graph().astream(
-            init_state, config=config, stream_mode="messages"
-        ):
-            yield chunk, metadata
+        async for event in self._astream_events(init_state, config, with_intro=True):
+            yield event
 
     async def astream_resume(self, thread_id: str, user_response: str):
         """恢复被打断的图执行，流式返回后续结果。
 
         用 Command(resume=user_response) 恢复 LangGraph 的 interrupt 点，
-        图会从暂停处继续执行。
+        图会从暂停处继续执行（不从头开始，因此不发意图识别的阶段事件）。
         """
         config = {"configurable": {"thread_id": thread_id}}
-        async for chunk, metadata in self.get_graph().astream(
-            Command(resume=user_response), config=config, stream_mode="messages"
+        async for event in self._astream_events(Command(resume=user_response), config, with_intro=False):
+            yield event
+
+    async def _astream_events(self, graph_input, config: dict, with_intro: bool):
+        """多路复用流式：stream_mode 传列表，同时订阅两个通道——
+
+        - messages：LLM 逐 token（打字机效果）→ 归一化为 token 事件
+        - updates ：节点完成时的增量输出 → 派生 stage 阶段事件
+        （interrupt 不在此处理，updates 里的 __interrupt__ 跳过，
+          由 API 层 _check_interrupt 统一检测，保持原行为不变）
+
+        yield 归一化事件：
+          {"type": "token", "chunk": AIMessageChunk, "metadata": dict}
+          {"type": "stage", "stage": {"stage": str, "status": str, "text": str}}
+        """
+        graph = self.get_graph()
+        if with_intro:
+            yield {"type": "stage", "stage": self._stage("intent", "running", "正在理解您的问题...")}
+        intent = None  # 意图识别完成后记住，用于预告下一阶段
+        async for mode, payload in graph.astream(
+            graph_input, config=config, stream_mode=["messages", "updates"]
         ):
-            yield chunk, metadata
+            if mode == "messages":
+                chunk, metadata = payload
+                yield {"type": "token", "chunk": chunk, "metadata": metadata}
+                continue
+
+            # mode == "updates"：{节点名: 该节点的增量输出}
+            for node_name, output in payload.items():
+                if node_name == "__interrupt__":
+                    continue  # HITL 打断由 API 层检测
+                stage = self._stage_from_update(node_name, output or {}, intent)
+                if stage is None:
+                    continue
+                if node_name == "intent_recognition":
+                    intent = (output or {}).get("intent")
+                yield {"type": "stage", "stage": stage}
+
+    @staticmethod
+    def _stage(stage: str, status: str, text: str) -> dict:
+        return {"stage": stage, "status": status, "text": text}
+
+    _INTENT_LABELS = {"qa": "法律咨询", "search": "案例检索", "document": "文书生成"}
+
+    def _stage_from_update(self, node_name: str, output: dict, intent: str | None):
+        """节点完成 → 阶段事件。返回 None 表示该节点不需要推送进度。"""
+        if node_name == "intent_recognition":
+            label = self._INTENT_LABELS.get(output.get("intent"), output.get("intent") or "?")
+            return self._stage("intent", "done", f"识别为：{label}")
+        if node_name == "info_gathering":
+            if output.get("info_sufficient") is False:
+                # 信息不足 → 自循环/打断追问，interrupt UI 会接管展示
+                return self._stage("clarify", "running", "正在收集补充信息...")
+            # 信息充分 → 按意图预告下一阶段
+            if intent == "document":
+                return self._stage("document", "running", "正在生成法律文书...")
+            return self._stage("retrieval", "running", "正在检索相关案例...")
+        if node_name == "retrieval_agent":
+            count = len(output.get("retrieved_cases") or [])
+            return self._stage("retrieval", "done", f"找到 {count} 条相关案例")
+        if node_name == "qa_generation":
+            return self._stage("generating", "running", "正在生成回答...")
+        if node_name == "document_generation":
+            return self._stage("document", "done", "文书生成完成")
+        return None  # check_intent / final_output 等不推送
 
 
 workflow = LegalMindWorkflow()

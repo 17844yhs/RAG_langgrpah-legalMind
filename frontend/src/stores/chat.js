@@ -75,6 +75,14 @@ export const useChatStore = defineStore('chat', () => {
       if (chunk.usage) {
         messages.value[aiIdx].usage = chunk.usage
       }
+      // 分阶段进度事件（意图识别/检索/生成），累积成步骤时间线：
+      // 同名 stage 就地更新（running→done），保持顺序不重复
+      if (chunk.stage) {
+        const list = messages.value[aiIdx].stages || (messages.value[aiIdx].stages = [])
+        const idx = list.findIndex((s) => s.stage === chunk.stage.stage)
+        if (idx >= 0) list[idx] = chunk.stage
+        else list.push(chunk.stage)
+      }
       if (chunk.session_id) {
         currentSessionId.value = chunk.session_id
         if (!sessions.value.find((s) => s.session_id === chunk.session_id)) {
@@ -89,10 +97,12 @@ export const useChatStore = defineStore('chat', () => {
       // ── Human-in-the-Loop：检测到 interrupt ──
       if (chunk.interrupt) {
         pendingInterrupt.value = chunk.interrupt
+        messages.value[aiIdx].stages = []  // 进度时间线交给 interrupt 问答 UI 接管
         return true  // 被打断，停止消费
       }
     }
-    // 流正常结束，清除 interrupt 状态
+    // 流正常结束：进度时间线完成使命，清掉避免历史残留
+    messages.value[aiIdx].stages = []
     pendingInterrupt.value = null
     return false
   }
@@ -107,8 +117,8 @@ export const useChatStore = defineStore('chat', () => {
     const userMsg = { role: 'user', content: text }
     messages.value.push(userMsg)
 
-    // 创建占位的 AI 回复
-    const aiMsg = { role: 'assistant', content: '', sources: [] }
+    // 创建占位的 AI 回复（stages：分阶段进度时间线）
+    const aiMsg = { role: 'assistant', content: '', sources: [], stages: [] }
     messages.value.push(aiMsg)
     const aiIdx = messages.value.length - 1
 
@@ -143,8 +153,8 @@ export const useChatStore = defineStore('chat', () => {
     const userMsg = { role: 'user', content: userResponse }
     messages.value.push(userMsg)
 
-    // 创建占位的 AI 回复
-    const aiMsg = { role: 'assistant', content: '', sources: [] }
+    // 创建占位的 AI 回复（stages：分阶段进度时间线）
+    const aiMsg = { role: 'assistant', content: '', sources: [], stages: [] }
     messages.value.push(aiMsg)
     const aiIdx = messages.value.length - 1
 

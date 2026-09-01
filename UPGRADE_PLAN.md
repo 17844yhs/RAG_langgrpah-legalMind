@@ -727,7 +727,9 @@ class QAAgent:
 
 ---
 
-### 6.5 LangGraph Stream Mode — 分阶段事件推送（2 小时）
+### 6.5 LangGraph Stream Mode — 分阶段事件推送（2 小时）✅
+
+> 落地记录：`stream_mode=["messages", "updates"]` 多路复用（未用 astream_events——事件量少一个量级、interrupt 检测零改动），workflow 层归一化 token/stage 两类事件，SSE 推送 `stage` 事件（意图/检索/生成 5 阶段），前端进度行渲染（running 转圈 / done 打勾，正文输出后自动隐藏）。E2E 实测事件时序正确、token 追踪不受影响（见 优化项目.md 10.1）。
 
 **业务背景**：用户问"帮我分析这个案子的法律风险"后，如果页面静止 10 秒才返回结果，体验极差。需要在 Agent 执行的每个阶段向前端推送状态事件，让用户实时看到进度。
 

@@ -46,6 +46,41 @@ const riskStyle = computed(() => {
 
       <!-- AI 消息 -->
       <div v-if="isAssistant" class="space-y-2">
+        <!-- 阶段进度时间线（Agent 执行阶段实时推送，正文开始输出后整卡隐藏） -->
+        <div
+          v-if="message.stages && message.stages.length > 0 && !message.content"
+          class="px-4 py-3 rounded-2xl space-y-2 text-xs"
+          :style="{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }"
+        >
+          <div
+            v-for="(s, i) in message.stages"
+            :key="s.stage"
+            class="flex items-center gap-2"
+          >
+            <!-- 已完成：绿勾 -->
+            <span
+              v-if="s.status === 'done'"
+              class="flex-shrink-0 font-medium"
+              :style="{ color: '#10b981' }"
+            >✓</span>
+            <!-- 进行中：呼吸灯圆点 -->
+            <span
+              v-else
+              class="w-2 h-2 rounded-full flex-shrink-0 animate-pulse"
+              :style="{ backgroundColor: 'var(--primary)' }"
+            ></span>
+            <span :style="s.status === 'done' ? { color: 'var(--text-secondary)' } : { color: 'var(--text)', fontWeight: 500 }">
+              {{ s.text }}
+            </span>
+            <!-- 连接线：非最后一项 -->
+            <span
+              v-if="i < message.stages.length - 1"
+              class="flex-1 h-px"
+              :style="{ backgroundColor: 'var(--border)' }"
+            ></span>
+          </div>
+        </div>
+
         <!-- 正在流式输出或已有内容 -->
         <div
           v-if="message.content"
@@ -55,7 +90,7 @@ const riskStyle = computed(() => {
           <div v-html="renderedContent"></div>
         </div>
         <div
-          v-else
+          v-else-if="!(message.stages && message.stages.length > 0)"
           class="px-4 py-2.5 rounded-2xl"
           :style="{ backgroundColor: 'var(--bg-secondary)' }"
         >
