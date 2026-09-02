@@ -38,6 +38,9 @@ dist-ssr/
 Thumbs.db
 
 # --- Project-specific ---
+# 优化/升级内部文档（不上传）
+优化项目.md
+UPGRADE_PLAN.md
 # Vector store local data (matches at any level, e.g. backend/data/chroma/)
 data/chroma/
 # Local embedding models (large files, entire directory)
