@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     SUMMARY_TRIGGER_CHARS: int = 2000  # 落入裁剪区的未摘要内容超过此字符数才触发摘要 LLM
     SUMMARY_MAX_CHARS: int = 400       # 摘要长度上限（提示词约束，控制摘要自身的 token 开销）
 
+    # Self-Reflection 质量门控（生成-评估-修正循环，见 workflow.quality_gate 节点）
+    REFLECTION_ENABLED: bool = True    # 总开关（关闭则 qa_generation 直通 final_output）
+    REFLECTION_MAX_ROUNDS: int = 1     # 重试轮数上限（1 = 最多重新生成一次，防止无限循环）
+    REFLECTION_SCORE_THRESHOLD: float = 0.6  # 质量分数线（低于则视为不通过）
+
     # LangSmith 配置
     LANGSMITH_TRACING: bool = True
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"

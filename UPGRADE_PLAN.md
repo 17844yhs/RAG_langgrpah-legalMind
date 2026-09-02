@@ -1105,7 +1105,9 @@ robust_chain = structured_chain.with_fallbacks([free_text_chain])
 
 ### 8.4 Agent 模式优化
 
-#### 8.4.1 Self-Reflection 质量门控 【高价值】
+#### 8.4.1 Self-Reflection 质量门控 【高价值】✅（2026-09-01 落地）
+
+> **落地记录**：主图新增 `quality_gate` 节点（qa_generation → quality_gate → 条件边）。评审 LLM 按清单（忠实性一票否决 / 针对性 / 可操作性）结构化打分，不通过则带反馈回 qa_generation 重新生成（`REFLECTION_MAX_ROUNDS=1` 封顶防循环）；通过/额度用尽降级放行时才把回答写入 messages（草稿不入对话历史）。流式 UX：重试时 API 发 `revision` 复位事件清空 API/前端两处草稿缓冲，前端时间线展示"自检未通过，正在修正回答..."。评审失败降级放行，`REFLECTION_ENABLED` 开关可关。详见 优化项目.md 9.2。
 
 **问题**：当前 QA 生成后直接输出，没有质量检查。LLM 可能产生不忠实于检索结果的答案（幻觉）。
 
@@ -1168,7 +1170,7 @@ def evaluate_node(state):
 | P0     | Reranker/BM25 异步化        | 性能      | 30min | ⭐⭐ 展示 async 理解     | ✅ |
 | P0     | 消息裁剪（防 context 爆炸）✅ | LangGraph | 1h    | ⭐⭐⭐ 展示状态管理      | ✅ |
 | P1     | 向量+BM25 并行检索          | 性能      | 30min | ⭐⭐ async.gather        | ✅ |
-| P1     | Self-Reflection 质量门控    | Agent     | 2h    | ⭐⭐⭐⭐ 高级 Agent 模式 |    |
+| P1     | Self-Reflection 质量门控    | Agent     | 2h    | ⭐⭐⭐⭐ 高级 Agent 模式 | ✅ |
 | P1     | Send API 并行专家分发       | LangGraph | 3h    | ⭐⭐⭐⭐⭐ 区分度最高    | ✅ |
 | P2     | astream_events 分阶段进度   | LangGraph | 2h    | ⭐⭐⭐ 产品体验          | ✅（stream_mode 复用实现） |
 | P2     | with_fallbacks 容灾         | LangChain | 1h    | ⭐⭐ 工程成熟度          | ✅ |

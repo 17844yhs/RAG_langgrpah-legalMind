@@ -1,5 +1,6 @@
 """LangGraph 工作流编排 — 定义 Agent 之间的协作流程（含 Human-in-the-Loop）"""
 import json
+import logging
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
 from langgraph.types import Command
@@ -14,6 +15,8 @@ from app.agents.human_loop import check_intent, info_gathering
 from app.llm.checkpoint import get_checkpointer
 from app.llm.context_manager import split_history, estimate_chars
 from app.config import settings
+
+logger = logging.getLogger("app.workflow")
 
 
 class AgentState(TypedDict):
@@ -35,6 +38,10 @@ class AgentState(TypedDict):
     # ── Context 管理（防对话无限增长导致 Context 爆炸）──
     context_summary: str          # 被裁掉的最老轮次的压缩摘要（结构化事实）
     summarized_count: int         # 已被摘要覆盖的 messages 前缀条数（增量摘要游标）
+    # ── Self-Reflection 质量门控（生成-评估-修正循环）──
+    reflection_feedback: str      # 质量自检不通过时的修正反馈（重试轮注入 prompt）
+    reflection_round: int         # 已重试轮数（防无限循环，上限 REFLECTION_MAX_ROUNDS）
+    reflection_passed: bool       # 门控结论（True→放行进 final_output，False→回 qa_generation）
 
 class LegalMindWorkflow:
     """法律咨询 Agent 工作流"""
@@ -54,6 +61,7 @@ class LegalMindWorkflow:
         workflow.add_node("info_gathering", info_gathering)     # HITL #2：多轮信息收集（自循环）
         workflow.add_node("retrieval_agent", retrieval_subgraph)  # ReAct 检索子图（内含 HITL #3）
         workflow.add_node("qa_generation", self._qa_node)
+        workflow.add_node("quality_gate", self._quality_gate_node)  # Self-Reflection 质量门控
         workflow.add_node("document_generation", self._document_node)
         workflow.add_node("final_output", self._output_node)
 
@@ -77,7 +85,13 @@ class LegalMindWorkflow:
             "search": "final_output",
         })
 
-        workflow.add_edge("qa_generation", "final_output")
+        # qa_generation → quality_gate →（自检通过/重试额度用尽）final_output
+        #                          →（自检不通过）回 qa_generation 带反馈重新生成
+        workflow.add_edge("qa_generation", "quality_gate")
+        workflow.add_conditional_edges("quality_gate", self._route_after_gate, {
+            "retry": "qa_generation",
+            "pass": "final_output",
+        })
         workflow.add_edge("document_generation", "final_output")
         workflow.add_edge("final_output", END)
 
@@ -109,8 +123,13 @@ class LegalMindWorkflow:
             summary = await self.qa_agent.summarize_history(summary, new_dropped)
             summarized_count = cut
 
+        # 质量门控重试轮：把上一版的自检反馈注入 prompt，引导针对性修正
+        reflection_feedback = state.get("reflection_feedback") or ""
+
         full_text = ""
-        async for chunk in self.qa_agent.stream_answer(cases, kept, summary):
+        async for chunk in self.qa_agent.stream_answer(
+            cases, kept, summary, reflection_feedback=reflection_feedback
+        ):
             full_text += chunk.content or ""
 
         # 流式正文完成后抽取元数据（结论/风险等级/法条）。
@@ -118,14 +137,46 @@ class LegalMindWorkflow:
         # 失败返回 None 不阻塞——元数据是增强，不是关键路径
         meta = await self.qa_agent.extract_meta(full_text)
 
+        # 注意：此处不写 messages（草稿可能被门控打回重来），
+        # 最终版由 quality_gate 节点在放行时统一写入对话历史
         return {
             "response": full_text,
-            "messages": [AIMessage(content=full_text)],
             "sources": self.qa_agent._extract_sources(cases),
             "answer_meta": meta.model_dump() if meta else {},
             # 持久化到 checkpoint：下轮继续增量摘要，不用重复压缩
             "context_summary": summary,
             "summarized_count": summarized_count,
+        }
+
+    async def _quality_gate_node(self, state: AgentState) -> dict:
+        """Self-Reflection 质量门控：LLM 按清单自评回答质量（忠实性/针对性/可操作性）。
+
+        - 不通过且还有重试额度 → 带反馈回 qa_generation 重新生成（草稿不入对话历史）
+        - 通过 / 重试额度用尽（降级放行）→ 把最终回答写入 messages，进入 final_output
+        - 开关关闭 → 直通（不花评审 LLM 调用）
+        """
+        response = state.get("response", "")
+
+        if not settings.REFLECTION_ENABLED:
+            return {"messages": [AIMessage(content=response)], "reflection_passed": True}
+
+        round_used = state.get("reflection_round", 0)
+        verdict = await self.qa_agent.reflect_answer(
+            response, state.get("retrieved_cases", []), state.get("query", "")
+        )
+
+        if not verdict.passed and round_used < settings.REFLECTION_MAX_ROUNDS:
+            logger.info("质量自检未通过(score=%.2f)，注入反馈重试：%s", verdict.score, verdict.feedback[:80])
+            return {
+                "reflection_feedback": verdict.feedback,
+                "reflection_round": round_used + 1,
+            }
+
+        # 通过（或重试额度用尽，门控让步放行——答案总得给用户）
+        return {
+            "messages": [AIMessage(content=response)],
+            "reflection_passed": True,
+            "reflection_feedback": "",  # 清理反馈，避免污染下一轮对话
         }
 
     async def _document_node(self, state: AgentState) -> dict:
@@ -171,6 +222,10 @@ class LegalMindWorkflow:
             return "search"
         else:
             return "qa"
+
+    def _route_after_gate(self, state: AgentState) -> str:
+        """质量门控路由：不通过→重试，通过/降级放行→final_output"""
+        return "pass" if state.get("reflection_passed") else "retry"
 
     #  图管理 
     def get_graph(self):
@@ -268,6 +323,11 @@ class LegalMindWorkflow:
             return self._stage("retrieval", "done", f"找到 {count} 条相关案例")
         if node_name == "qa_generation":
             return self._stage("generating", "running", "正在生成回答...")
+        if node_name == "quality_gate":
+            if output.get("reflection_passed"):
+                return self._stage("reflect", "done", "质量自检通过")
+            # 重试：此事件同时是 API 层的"复位信号"（清空第一版草稿）
+            return self._stage("reflect", "running", "自检未通过，正在修正回答...")
         if node_name == "document_generation":
             return self._stage("document", "done", "文书生成完成")
         return None  # check_intent / final_output 等不推送

@@ -11,7 +11,7 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
 from app.config import settings
 from app.llm.model_client import get_llm
-from app.llm.prompts import QA_SYSTEM_PROMPT, QA_USER_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT
+from app.llm.prompts import QA_SYSTEM_PROMPT, QA_USER_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT, REFLECTION_PROMPT
 
 logger = logging.getLogger("app.agent")
 
@@ -31,6 +31,19 @@ class LegalAnswerMeta(BaseModel):
     )
 
 
+class ReflectionVerdict(BaseModel):
+    """Self-Reflection 质量门控的评审结论。
+
+    忠实性（有无编造法条/事实）一票否决；针对性/可操作性轻微不足可放行但记录反馈。
+    """
+    passed: bool = Field(description="回答是否达到可交付标准")
+    score: float = Field(description="综合质量分（0-1），忠实性权重最高")
+    feedback: str = Field(
+        default="",
+        description="不通过时的具体修正反馈（哪条法条/事实有问题、怎么改）；通过时可为空",
+    )
+
+
 class QAAgent:
     """法律问答 Agent：利用大语言模型（LLM）结合检索到的相关法律案例，生成针对用户问题的专业回答。"""
     def __init__(self):
@@ -41,13 +54,21 @@ class QAAgent:
             .with_structured_output(LegalAnswerMeta, method="function_calling")
             .with_retry(stop_after_attempt=2)
         )
+        # 质量门控评审器：结构化输出 + 重试（评审失败=门控失效，放行为降级路径）
+        self.reflect_llm = (
+            self.llm
+            .with_structured_output(ReflectionVerdict, method="function_calling")
+            .with_retry(stop_after_attempt=2)
+        )
         # ── LCEL 统一管道：一切皆 Runnable，自动获得 ainvoke/astream/batch 能力，
         #    每个中间步骤（消息组装/提示模板）自动进 LangSmith trace ──
         # QA 主链：消息组装 → LLM（输出 AIMessageChunk，保留打字机流式语义）
         # [旧写法] answer/stream_answer 内手动：self.llm.ainvoke/astream(self.build_messages(cases, messages, summary))
         self.qa_chain = (
             RunnableLambda(
-                lambda x: self.build_messages(x["cases"], x["messages"], x.get("summary"))
+                lambda x: self.build_messages(
+                    x["cases"], x["messages"], x.get("summary"), x.get("reflection_feedback")
+                )
             )
             | self.llm
         )
@@ -80,13 +101,14 @@ class QAAgent:
             return None
 
     def build_messages(self, cases: List[Dict], messages: List[BaseMessage],
-                       summary: str = None) -> List[BaseMessage]:
-        """组装 LLM 输入消息：system（人设 + 案例上下文）+ [历史摘要] + 对话历史视图。
+                       summary: str = None, reflection_feedback: str = None) -> List[BaseMessage]:
+        """组装 LLM 输入消息：system（人设 + 案例上下文）+ [历史摘要] + [质量修正反馈] + 对话历史视图。
 
         - 案例作为当轮 system 注入，绝不进入长期累积的 messages
         - messages 应是裁剪后的视图（context_manager.split_history 的 kept），
           checkpoint 里的全量历史不受影响
         - summary：被裁掉的最老轮次的压缩摘要，注入在 system 之后、原文之前
+        - reflection_feedback：质量门控不通过时的修正反馈（重试轮注入，引导针对性修改）
         """
         system_content = (
             QA_SYSTEM_PROMPT
@@ -96,7 +118,33 @@ class QAAgent:
         msgs: List[BaseMessage] = [SystemMessage(content=system_content)]
         if summary:
             msgs.append(SystemMessage(content=f"## 早期对话摘要（由系统自动压缩）\n{summary}"))
+        if reflection_feedback:
+            msgs.append(SystemMessage(
+                content=f"## 质量自检反馈（上一版回答未通过审核，本次必须修正）\n{reflection_feedback}"
+            ))
         return msgs + list[BaseMessage](messages)
+
+    async def reflect_answer(self, answer: str, cases: List[Dict], query: str) -> ReflectionVerdict:
+        """质量门控评审：LLM 按清单（忠实性/针对性/可操作性）给回答打分。
+
+        评审失败降级为放行（门控是增强路径，失效时不阻塞主流程）。
+        """
+        try:
+            verdict = await self.reflect_llm.ainvoke(REFLECTION_PROMPT.format(
+                query=query,
+                cases=self._format_cases(cases),
+                answer=answer[:6000],
+            ))
+            if verdict is None:  # function_calling 模式拒答返回 None 而非抛异常
+                raise ValueError("structured output returned None")
+            # 分数线兜底：LLM 说 passed 但分低于阈值 → 仍不通过（防评审宽松漂移）
+            if verdict.passed and verdict.score < settings.REFLECTION_SCORE_THRESHOLD:
+                verdict.passed = False
+                verdict.feedback = verdict.feedback or "综合质量分低于阈值，请补充关键依据后重新回答"
+            return verdict
+        except Exception:
+            logger.exception("质量自检评审失败，降级为放行")
+            return ReflectionVerdict(passed=True, score=1.0, feedback="")
 
     async def summarize_history(self, prev_summary: str, dropped: List[BaseMessage]) -> str:
         """把落入裁剪区的历史轮次压缩成结构化事实摘要，并与已有摘要合并。
@@ -125,21 +173,23 @@ class QAAgent:
             logger.exception("历史摘要压缩失败，降级为仅裁剪")
             return prev_summary or ""
 
-    async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None) ->List[BaseMessage]:
+    async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None,reflection_feedback:str=None) ->List[BaseMessage]:
 
         # [旧写法] response = await self.llm.ainvoke(self.build_messages(cases, messages, summary))
         response = await self.qa_chain.ainvoke(
-            {"cases": cases, "messages": messages or [], "summary": summary}
+            {"cases": cases, "messages": messages or [], "summary": summary,
+             "reflection_feedback": reflection_feedback}
         )
 
         sources = self._extract_sources(cases)
 
         return {"answer":response,"sources":sources}
 
-    async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None):
+    async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None,reflection_feedback:str=None):
         # [旧写法] async for chunk in self.llm.astream(self.build_messages(cases, messages, summary)):
         async for chunk in self.qa_chain.astream(
-            {"cases": cases, "messages": messages or [], "summary": summary}
+            {"cases": cases, "messages": messages or [], "summary": summary,
+             "reflection_feedback": reflection_feedback}
         ):
             yield chunk
     

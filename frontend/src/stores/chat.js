@@ -64,6 +64,10 @@ export const useChatStore = defineStore('chat', () => {
       if (chunk.content !== undefined) {
         messages.value[aiIdx].content += chunk.content
       }
+      // 质量自检重试：第一版草稿作废，清空气泡等修正版从零重写
+      if (chunk.revision) {
+        messages.value[aiIdx].content = ''
+      }
       if (chunk.sources) {
         messages.value[aiIdx].sources = chunk.sources
       }

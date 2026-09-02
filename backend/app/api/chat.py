@@ -148,8 +148,13 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user), h
 
             async for event in workflow.astream(query=query, thread_id=session_id):
                 if event["type"] == "stage":
+                    stage = event["stage"]
+                    # 质量自检重试：第一版草稿作废，复位 API 侧缓冲并通知前端清空气泡
+                    if stage.get("stage") == "reflect" and stage.get("status") == "running":
+                        full_text = ""
+                        yield f"data: {json.dumps({'revision': True}, ensure_ascii=False)}\n\n"
                     # 阶段进度事件（意图/检索/生成），前端渲染为进度提示
-                    yield f"data: {json.dumps({'stage': event['stage']}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'stage': stage}, ensure_ascii=False)}\n\n"
                     continue
                 chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
@@ -206,7 +211,12 @@ async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_us
                 user_response=request.response,
             ):
                 if event["type"] == "stage":
-                    yield f"data: {json.dumps({'stage': event['stage']}, ensure_ascii=False)}\n\n"
+                    stage = event["stage"]
+                    # 质量自检重试：第一版草稿作废，复位 API 侧缓冲并通知前端清空气泡
+                    if stage.get("stage") == "reflect" and stage.get("status") == "running":
+                        full_text = ""
+                        yield f"data: {json.dumps({'revision': True}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'stage': stage}, ensure_ascii=False)}\n\n"
                     continue
                 chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
