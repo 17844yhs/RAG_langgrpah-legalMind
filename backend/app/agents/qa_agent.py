@@ -1,14 +1,16 @@
 """法律问答 Agent — 基于检索到的案例回答法律问题"""
 
+from langchain_core.messages.base import BaseMessage
 import logging
 from typing import List, Dict, Optional, Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import BaseMessage,SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
+from app.config import settings
 from app.llm.model_client import get_llm
-from app.llm.prompts import QA_SYSTEM_PROMPT, QA_USER_PROMPT, META_EXTRACT_PROMPT
+from app.llm.prompts import QA_SYSTEM_PROMPT, QA_USER_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT
 
 logger = logging.getLogger("app.agent")
 
@@ -54,28 +56,59 @@ class QAAgent:
             logger.exception("元数据抽取失败，降级跳过（不影响回答本身）")
             return None
 
-    def build_messages(self, cases: List[Dict], messages: List[BaseMessage]) -> List[BaseMessage]:
-        """组装 LLM 输入消息：system（人设 + 案例上下文）+ 对话历史（含当前问题）。
+    def build_messages(self, cases: List[Dict], messages: List[BaseMessage],
+                       summary: str = None) -> List[BaseMessage]:
+        """组装 LLM 输入消息：system（人设 + 案例上下文）+ [历史摘要] + 对话历史视图。
 
-        案例作为当轮 system 注入，绝不进入长期累积的 messages。
+        - 案例作为当轮 system 注入，绝不进入长期累积的 messages
+        - messages 应是裁剪后的视图（context_manager.split_history 的 kept），
+          checkpoint 里的全量历史不受影响
+        - summary：被裁掉的最老轮次的压缩摘要，注入在 system 之后、原文之前
         """
         system_content = (
             QA_SYSTEM_PROMPT
             + "\n\n## 相关案例\n"
             + self._format_cases(cases)
         )
-        return [SystemMessage(content=system_content)] + list(messages)
-    
-    async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None) ->List[BaseMessage]:
-        
-        response = await self.llm.ainvoke(self.build_messages(cases,messages))
-    
+        msgs: List[BaseMessage] = [SystemMessage(content=system_content)]
+        if summary:
+            msgs.append(SystemMessage(content=f"## 早期对话摘要（由系统自动压缩）\n{summary}"))
+        return msgs + list[BaseMessage](messages)
+
+    async def summarize_history(self, prev_summary: str, dropped: List[BaseMessage]) -> str:
+        """把落入裁剪区的历史轮次压缩成结构化事实摘要，并与已有摘要合并。
+
+        增强功能：失败降级返回旧摘要（此时仅有裁剪、无压缩，
+        被裁内容丢失但主流程不阻塞）。
+        """
+        if not dropped:
+            return prev_summary or ""
+        history_text = "\n".join(
+            f"{'用户' if isinstance(m, HumanMessage) else '助手'}: {m.content}"
+            for m in dropped
+        )
+        try:
+            resp = await self.llm.ainvoke(HISTORY_SUMMARIZE_PROMPT.format(
+                prev_summary=prev_summary or "无",
+                history=history_text,
+                max_chars=settings.SUMMARY_MAX_CHARS,
+            ))
+            new_summary = (resp.content or "").strip()
+            return new_summary or prev_summary or ""
+        except Exception:
+            logger.exception("历史摘要压缩失败，降级为仅裁剪")
+            return prev_summary or ""
+
+    async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None) ->List[BaseMessage]:
+
+        response = await self.llm.ainvoke(self.build_messages(cases,messages,summary))
+
         sources = self._extract_sources(cases)
-        
+
         return {"answer":response,"sources":sources}
-    
-    async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None):
-        async for chunk in self.llm.astream(self.build_messages(cases,messages)):
+
+    async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None):
+        async for chunk in self.llm.astream(self.build_messages(cases,messages,summary)):
             yield chunk
     
     def _format_cases(self,cases:List[Dict]) ->str:

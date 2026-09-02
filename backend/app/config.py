@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     RAG_SCORE_THRESHOLD: float = 0.7
     RERANK_ENABLED: bool = True
 
+    # Context 管理（对话历史视图裁剪 + 自动摘要压缩，见 app/llm/context_manager.py）
+    HISTORY_CHAR_BUDGET: int = 6000    # 历史视图预算（字符，≈3-4k token，超了才裁）
+    SUMMARY_TRIGGER_CHARS: int = 2000  # 落入裁剪区的未摘要内容超过此字符数才触发摘要 LLM
+    SUMMARY_MAX_CHARS: int = 400       # 摘要长度上限（提示词约束，控制摘要自身的 token 开销）
+
     # LangSmith 配置
     LANGSMITH_TRACING: bool = True
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"

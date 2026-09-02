@@ -12,6 +12,8 @@ from app.agents.document_agent import DocumentAgent
 from app.agents.retrieval_agent import retrieval_subgraph
 from app.agents.human_loop import check_intent, info_gathering
 from app.llm.checkpoint import get_checkpointer
+from app.llm.context_manager import split_history, estimate_chars
+from app.config import settings
 
 
 class AgentState(TypedDict):
@@ -29,7 +31,10 @@ class AgentState(TypedDict):
     response: str                 # 最终响应
     sources: list                 # 来源引用
     answer_meta: dict             # 回答元数据（summary/risk_level/applicable_laws）
-    messages: Annotated[list[BaseMessage], add_messages]  # 对话历史
+    messages: Annotated[list[BaseMessage], add_messages]  # 对话历史（checkpoint 全量保留）
+    # ── Context 管理（防对话无限增长导致 Context 爆炸）──
+    context_summary: str          # 被裁掉的最老轮次的压缩摘要（结构化事实）
+    summarized_count: int         # 已被摘要覆盖的 messages 前缀条数（增量摘要游标）
 
 class LegalMindWorkflow:
     """法律咨询 Agent 工作流"""
@@ -89,10 +94,23 @@ class LegalMindWorkflow:
 
     async def _qa_node(self, state: AgentState) -> dict:
         cases = state["retrieved_cases"]
-        messages = state["messages"]
+        all_msgs = list(state["messages"])
+
+        # ── Context 管理：视图裁剪 + 增量摘要压缩 ──
+        # checkpoint 里的 messages 全量保留（HITL resume 依赖），这里只裁"进 prompt 的视图"
+        summary = state.get("context_summary") or ""
+        summarized_count = state.get("summarized_count", 0)
+        kept, _dropped = split_history(all_msgs)
+        # 增量摘要：裁剪区中尚未入摘要的段落 = msgs[summarized_count : 裁剪区终点]
+        cut = len(all_msgs) - len(kept)
+        new_dropped = all_msgs[summarized_count:cut]
+        # 累积到阈值才触发摘要 LLM（小额裁剪不值得一次调用）
+        if estimate_chars(new_dropped) >= settings.SUMMARY_TRIGGER_CHARS:
+            summary = await self.qa_agent.summarize_history(summary, new_dropped)
+            summarized_count = cut
 
         full_text = ""
-        async for chunk in self.qa_agent.stream_answer(cases, messages):
+        async for chunk in self.qa_agent.stream_answer(cases, kept, summary):
             full_text += chunk.content or ""
 
         # 流式正文完成后抽取元数据（结论/风险等级/法条）。
@@ -105,6 +123,9 @@ class LegalMindWorkflow:
             "messages": [AIMessage(content=full_text)],
             "sources": self.qa_agent._extract_sources(cases),
             "answer_meta": meta.model_dump() if meta else {},
+            # 持久化到 checkpoint：下轮继续增量摘要，不用重复压缩
+            "context_summary": summary,
+            "summarized_count": summarized_count,
         }
 
     async def _document_node(self, state: AgentState) -> dict:

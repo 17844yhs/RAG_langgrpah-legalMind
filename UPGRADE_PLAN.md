@@ -911,7 +911,7 @@ vector_docs, bm25_docs = await asyncio.gather(
 
 ### 8.2 LangGraph 高阶用法
 
-#### 8.2.1 消息无限增长导致 Context 爆炸 【高优先级】
+#### 8.2.1 消息无限增长导致 Context 爆炸 【高优先级】✅
 
 **问题**：`AgentState.messages` 用 `add_messages` reducer，只增不减。多轮对话后 messages 越来越长，最终超出 LLM 的 context window，触发 token 限制报错。
 
@@ -935,6 +935,14 @@ def some_node(state):
 ```
 
 **更通用的做法**：在 `_build_graph` 编译时，或在每个节点入口处做裁剪。核心原则是**状态不能无限增长**，必须有裁剪策略。
+
+**✅ 落地记录（2026-09-01，方案升级为"视图裁剪 + 自动摘要压缩"）**：`RemoveMessage` 物理删除会破坏 HITL resume（interrupt 恢复依赖完整 checkpoint state），且纯裁剪丢关键事实——最终实现三层防线：
+
+1. **视图层预算裁剪**：`context_manager.split_history` 按字符预算（6000 ≈ 3-4k token）从最新往回保留完整轮次，checkpoint 全量不动
+2. **增量摘要压缩**：落入裁剪区未摘要内容超 2000 字触发一次 LLM 结构化事实压缩，`context_summary` + `summarized_count` 游标持久化到 state，下轮增量合并
+3. **兜底**：极端超预算也保证当前问题进入 prompt
+
+接入 `_qa_node`（prompt 视图）与 `info_gathering`（history 文本）。E2E：16041 字历史 → 摘要覆盖前 26 条、关键事实（月薪/赔偿额/法条/时效）零丢失。详见 优化项目.md 10.5。
 
 #### 8.2.2 astream_events 分阶段进度推送 【中优先级】
 
@@ -1154,7 +1162,7 @@ def evaluate_node(state):
 | 优先级 | 优化项                      | 类型      | 预估  | 面试价值                 |
 | ------ | --------------------------- | --------- | ----- | ------------------------ |
 | P0     | Reranker/BM25 异步化        | 性能      | 30min | ⭐⭐ 展示 async 理解     |
-| P0     | 消息裁剪（防 context 爆炸） | LangGraph | 1h    | ⭐⭐⭐ 展示状态管理      |
+| P0     | 消息裁剪（防 context 爆炸）✅ | LangGraph | 1h    | ⭐⭐⭐ 展示状态管理      |
 | P1     | 向量+BM25 并行检索          | 性能      | 30min | ⭐⭐ async.gather        |
 | P1     | Self-Reflection 质量门控    | Agent     | 2h    | ⭐⭐⭐⭐ 高级 Agent 模式 |
 | P1     | Send API 并行专家分发       | LangGraph | 3h    | ⭐⭐⭐⭐⭐ 区分度最高    |

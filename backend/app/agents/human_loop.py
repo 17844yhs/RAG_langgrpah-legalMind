@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.llm.model_client import get_llm
 from app.llm.prompts import INFO_GATHERING_PROMPT
+from app.llm.context_manager import split_history, format_history_text
 
 logger = logging.getLogger("app.agent")
 
@@ -86,11 +87,10 @@ async def info_gathering(state):
         .with_retry(stop_after_attempt=2)
     )
 
-    # 构建对话历史文本（含追问和用户回答，保持完整上下文）
-    history = "\n".join([
-        f"{'用户' if isinstance(m, HumanMessage) else '助手'}: {m.content}"
-        for m in state.get("messages", [])
-    ])
+    # 构建对话历史文本：视图裁剪 + 摘要（超长对话不把全量历史喂给判断 LLM）
+    # 摘要在前（早期轮次）、原文在后（近期轮次），与 qa 侧的注入顺序一致
+    kept, _ = split_history(state.get("messages", []))
+    history = format_history_text(kept, state.get("context_summary") or "")
 
     try:
         result = await llm.ainvoke(INFO_GATHERING_PROMPT.format(
