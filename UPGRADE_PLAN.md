@@ -944,7 +944,9 @@ def some_node(state):
 
 接入 `_qa_node`（prompt 视图）与 `info_gathering`（history 文本）。E2E：16041 字历史 → 摘要覆盖前 26 条、关键事实（月薪/赔偿额/法条/时效）零丢失。详见 优化项目.md 10.5。
 
-#### 8.2.2 astream_events 分阶段进度推送 【中优先级】
+#### 8.2.2 astream_events 分阶段进度推送 【中优先级】✅（升级为 stream_mode 多路复用实现，见 6.5）
+
+> **落地记录（2026-09-01）**：未采用 `astream_events`（v2 每 token/内部链都发事件，事件量过大），改用 `stream_mode=["messages", "updates"]` 双通道复用：`messages` 出 token、`updates` 出阶段事件，归一化为 `{"type": "token"|"stage"}` 统一分发。interrupt 逻辑不受影响，E2E 已验证。
 
 **问题**：当前 `stream_mode="messages"` 只能捕获 LLM 的逐 token 流，无法告诉前端"正在识别意图"→"正在检索"→"正在重排"等阶段。
 
@@ -967,7 +969,7 @@ async for event in graph.astream_events(input, config=config, version="v2"):
         # 检索完成，告诉前端找到几条
 ```
 
-#### 8.2.3 Send API 并行专家分发 【高价值，面试加分】
+#### 8.2.3 Send API 并行专家分发 【高价值，面试加分】✅（见 6.2）
 
 **问题**：当前图是纯串行的（intent → retrieval → qa → output）。合同审查等场景需要多维度并行分析（劳动法、知识产权、合同法），串行调用耗时 = 各专家耗时之和。
 
@@ -1058,7 +1060,7 @@ chain = (
 # 自动获得 .astream() 能力，无需手写 stream_answer()
 ```
 
-#### 8.3.2 with_fallbacks 容灾链 【中优先级】
+#### 8.3.2 with_fallbacks 容灾链 【中优先级】✅（见 6.3）
 
 **通用概念**：LangChain 的 `with_fallbacks()` 是 Runnable 级别的容灾。当主 Runnable 抛异常时，自动切换到备用 Runnable。对 LLM 来说就是"主模型挂了 → 用备用模型"。
 
@@ -1079,7 +1081,7 @@ robust_chain = structured_chain.with_fallbacks([free_text_chain])
 
 **通用原则**：当目标模型支持 function calling 时，`function_calling` 模式是最通用的选择。`json_schema` 模式效率略高（不经过 tool calling 协议），但兼容性差。
 
-#### 8.3.4 BaseCallbackHandler 生命周期 【可选增强】
+#### 8.3.4 BaseCallbackHandler 生命周期 【可选增强】✅（已落地 Token 追踪实践，见 6.4）
 
 **通用概念**：LangChain 的回调系统贯穿整个 Runnable 执行生命周期：
 
@@ -1161,18 +1163,18 @@ def evaluate_node(state):
 
 | 优先级 | 优化项                      | 类型      | 预估  | 面试价值                 |
 | ------ | --------------------------- | --------- | ----- | ------------------------ |
-| P0     | Reranker/BM25 异步化        | 性能      | 30min | ⭐⭐ 展示 async 理解     |
-| P0     | 消息裁剪（防 context 爆炸）✅ | LangGraph | 1h    | ⭐⭐⭐ 展示状态管理      |
-| P1     | 向量+BM25 并行检索          | 性能      | 30min | ⭐⭐ async.gather        |
-| P1     | Self-Reflection 质量门控    | Agent     | 2h    | ⭐⭐⭐⭐ 高级 Agent 模式 |
-| P1     | Send API 并行专家分发       | LangGraph | 3h    | ⭐⭐⭐⭐⭐ 区分度最高    |
-| P2     | astream_events 分阶段进度   | LangGraph | 2h    | ⭐⭐⭐ 产品体验          |
-| P2     | with_fallbacks 容灾         | LangChain | 1h    | ⭐⭐ 工程成熟度          |
-| P2     | QA Agent LCEL 重构          | LangChain | 1h    | ⭐⭐ 代码统一性          |
-| P3     | HybridRetriever 单例        | 性能      | 30min | ⭐                       |
-| P3     | Callbacks Token 追踪        | LangChain | 2h    | ⭐⭐ 成本意识            |
-| P3     | 文书生成流式化              | 性能      | 30min | ⭐                       |
-| P3     | retry 注入反思信息          | Agent     | 30min | ⭐⭐⭐ Reflection 模式   |
+| P0     | Reranker/BM25 异步化        | 性能      | 30min | ⭐⭐ 展示 async 理解     | ✅ |
+| P0     | 消息裁剪（防 context 爆炸）✅ | LangGraph | 1h    | ⭐⭐⭐ 展示状态管理      | ✅ |
+| P1     | 向量+BM25 并行检索          | 性能      | 30min | ⭐⭐ async.gather        | ✅ |
+| P1     | Self-Reflection 质量门控    | Agent     | 2h    | ⭐⭐⭐⭐ 高级 Agent 模式 |    |
+| P1     | Send API 并行专家分发       | LangGraph | 3h    | ⭐⭐⭐⭐⭐ 区分度最高    | ✅ |
+| P2     | astream_events 分阶段进度   | LangGraph | 2h    | ⭐⭐⭐ 产品体验          | ✅（stream_mode 复用实现） |
+| P2     | with_fallbacks 容灾         | LangChain | 1h    | ⭐⭐ 工程成熟度          | ✅ |
+| P2     | QA Agent LCEL 重构          | LangChain | 1h    | ⭐⭐ 代码统一性          |    |
+| P3     | HybridRetriever 单例        | 性能      | 30min | ⭐                       | ✅ |
+| P3     | Callbacks Token 追踪        | LangChain | 2h    | ⭐⭐ 成本意识            | ✅ |
+| P3     | 文书生成流式化              | 性能      | 30min | ⭐                       | ✅ |
+| P3     | retry 注入反思信息          | Agent     | 30min | ⭐⭐⭐ Reflection 模式   | ✅（基础 retry 已实现） |
 
 ---
 
