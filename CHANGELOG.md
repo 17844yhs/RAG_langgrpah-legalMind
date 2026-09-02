@@ -9,6 +9,7 @@
 
 ### 新增
 
+- **🐳 全栈容器化部署**：`backend/Dockerfile`（uv 多阶段构建，仅携带虚拟环境+源码）+ `frontend/Dockerfile`（Node 构建 → nginx 托管 SPA）+ `nginx.conf`（SPA 路由回退 + `/api` 反代，SSE 关闭缓冲）；`docker-compose.yml` 通过 profiles 区分环境——开发 `up -d` 只起数据库，部署 `--profile prod up -d --build` 全栈拉起（postgres healthcheck → backend → frontend 依赖编排），Chroma/BM25 索引与 Embedding 模型走宿主机 volume 持久化
 - **🧹 Context 管理 — 视图裁剪 + 自动摘要压缩（防 Context 爆炸）**：checkpoint 全量保留 messages（HITL resume 依赖），LLM 输入走视图裁剪（字符预算 6000，轮次边界对齐，当前问题永不丢）；落入裁剪区的内容超 2000 字触发一次 LLM 增量摘要压缩（结构化事实提取：金额/期限/法条/时效），摘要存 `state.context_summary` + `summarized_count` 游标持久化，下轮只压新增量；`_qa_node` 与 `info_gathering` 两个接入点。E2E：32 条消息 16041 字 → 摘要覆盖前 26 条且关键事实零丢失，3 轮对话无回归
 - **🔗 LCEL 统一管道重构（QA Agent）**：`qa_agent.py` 收敛为三条 LCEL 链——`qa_chain`（RunnableLambda 组装消息 | llm，ainvoke/astream 统一走管道）、`summarize_chain`（PromptTemplate | llm | StrOutputParser）、`meta_chain`（预处理 | meta_llm）；消息组装/模板渲染自动进 LangSmith trace，输出保持 AIMessageChunk 流式语义不变
 - **🪞 Self-Reflection 质量门控（生成-评估-修正循环）**：qa_generation 后新增 `quality_gate` 节点，评审 LLM 按清单自评（忠实性一票否决/针对性/可操作性），不通过带反馈重试（`REFLECTION_MAX_ROUNDS` 封顶）；草稿不入对话历史，`revision` 复位事件贯穿 API/前端清空第一版草稿；评审失败与重试额度用尽均降级放行，`REFLECTION_ENABLED` 开关可关

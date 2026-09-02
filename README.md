@@ -1,6 +1,3 @@
-claude
-
-
 <p align="center">
   <img src="frontend/src/assets/hero.png" alt="LegalMind" width="400"/>
 </p>
@@ -16,7 +13,7 @@ claude
 </p>
 
 <p align="center">
-  基于 LLM + RAG 技术的智能法律咨询平台 —— 融合 LangGraph 多 Agent 协同工作流、HITL 人机交互、ReAct 检索子图与混合检索技术，提供专业、精准、可控的法律智能服务。
+  基于 LLM + RAG 的智能法律咨询平台 —— LangGraph 多 Agent 协同工作流、HITL 人机协同、ReAct 检索子图、混合检索与 Self-Reflection 质量门控，提供专业、精准、可控的法律智能服务。
 </p>
 
 ---
@@ -28,21 +25,43 @@ claude
 - **💬 智能法律问答** — 基于 LangGraph Agent 工作流，精准识别用户意图，结合 RAG 检索结果生成有据可依的法律解答
 - **🔍 案例检索** — 语义向量 + BM25 关键词混合检索 + BGE-Reranker 重排序，快速定位相关法律案例
 - **📝 法律文书生成** — 自动生成民事起诉状、答辩状、律师函等专业法律文书
-- **🔄 流式对话** — SSE 实时流式输出，对话体验流畅自然
-- **📚 多轮对话** — 基于 LangGraph Checkpointer 持久化对话状态，支持上下文延续
+- **🔄 流式对话** — SSE 实时流式输出 + 分阶段进度时间线（意图识别 → 检索 → 生成 → 质量自检），过程透明可见
+- **📚 多轮对话** — LangGraph Checkpointer（PostgresSaver）持久化对话状态，支持 HITL 中断恢复与上下文延续
 - **🔐 用户认证** — JWT 身份认证，保护用户数据安全
 
 ### 技术亮点
 
-- **🤝 Human-in-the-Loop 人机交互** — 三个 HITL 检查点：意图确认（置信度 < 0.8 触发澄清）、多轮信息收集（LLM 判断信息不足时自循环追问，最多 3 轮）和检索质量评估（结果不足时引导用户补充信息），基于 LangGraph `interrupt` API 实现
+- **🤝 Human-in-the-Loop 人机协同** — 三个 HITL 检查点：意图确认（置信度 < 0.8 触发澄清）、多轮信息收集（LLM 判断信息不足时自循环追问，最多 3 轮）、检索质量评估（结果不足时引导用户补充），基于 LangGraph `interrupt` API 实现
+- **🪞 Self-Reflection 质量门控** — 生成-评估-修正循环：回答生成后由评审 LLM 按清单自评（忠实性一票否决 / 针对性 / 可操作性），不通过则带反馈重新生成；草稿不入对话历史，重试额度封顶防循环，评审失败降级放行
+- **💰 Token 用量全链路追踪** — `BaseCallbackHandler` 采集每次 LLM 调用用量 → ContextVar 请求级归集 → SSE `usage` 事件 → PostgreSQL JSONB 落库 → 前端展示"消耗 N tokens（输入/输出/调用次数）"
+- **🧹 Context 管理** — 视图裁剪（字符预算 + 轮次边界对齐）+ 增量摘要压缩（结构化事实提取：金额/期限/法条/时效），checkpoint 全量保留历史，防长对话 Context 爆炸
+- **🛡️ LLM 容灾链** — 主/备 DeepSeek 双实例 `with_fallbacks`，6 类网络/限流异常显式配全，流式场景自动切换
 - **🛠️ Tool Calling + 参数校验** — `search_cases` Tool 使用 Pydantic Schema 校验（年份范围、案由枚举），LLM 自动提取结构化参数，4 层错误处理架构
-- **🧩 ReAct 检索子图** — 自行封装的 4 节点子图（agent → tools → evaluate → finish），支持自动重试（3 轮）和 HITL 介入
-- **📊 混合检索管线** — BM25 + 向量检索 + RRF（Reciprocal Rank Fusion）融合 + BGE-Reranker-v2-m3 精排，三级检索管线
-- **📐 Structured Output** — `with_structured_output(method="function_calling")` 约束 LLM 输出格式，意图识别返回结构化 `IntentResult`
-- **📡 LangSmith 全链路追踪** — 覆盖意图识别 → 检索 → 重排 → 生成全链路，支持按 session_id 回溯
+- **🧩 ReAct 检索子图** — 自行封装的 4 节点子图（agent → tools → evaluate → finish），支持自动重试与 HITL 介入
+- **📊 混合检索管线** — BM25 + 向量检索 + RRF（Reciprocal Rank Fusion）融合 + BGE-Reranker-v2-m3 精排
+- **📐 Structured Output** — `with_structured_output(method="function_calling")` 约束 LLM 输出格式（意图识别 / 元数据抽取 / 质量评审）
+- **🚨 统一错误体系** — RFC 9457 Problem Details 规范（type/title/status/detail/code/traceId），TraceId 纯 ASGI 中间件贯穿请求与日志，SSE 错误走结构化事件不破坏流
+- **📡 LangSmith 全链路追踪** — 覆盖意图识别 → 检索 → 重排 → 生成全链路，LCEL 管道使消息组装/模板渲染步骤可观测
 - **📋 RAGAS 评估体系** — 100 条标注数据集 + RAGAS 4 指标评估（faithfulness / answer_relevancy / context_precision / context_recall）+ 自定义 LLM Judge
 
-## 🏗️ 技术栈
+## 🏗️ 工作流架构
+
+```mermaid
+flowchart TD
+    A[用户提问] --> B[意图识别<br/>Structured Output]
+    B --> C{意图确认 HITL<br/>置信度 < 0.8 澄清}
+    C --> D[信息收集<br/>自循环追问 ≤ 3 轮]
+    D --> E{意图路由}
+    E -->|咨询/检索| F[ReAct 检索子图<br/>agent → tools → evaluate → finish]
+    F --> G[QA 生成<br/>LCEL 管道 + 流式输出]
+    G --> H{Self-Reflection<br/>质量门控}
+    H -->|不通过| G
+    H -->|通过/降级放行| I[最终输出]
+    E -->|文书| J[文书生成] --> I
+    F -->|纯检索| I
+```
+
+## 🛠️ 技术栈
 
 | 后端                   | 前端                    | 基础设施          |
 | ---------------------- | ----------------------- | ----------------- |
@@ -60,7 +79,7 @@ claude
 
 - Python >= 3.14（[安装 uv](https://docs.astral.sh/uv/getting-started/installation/)）
 - Node.js >= 18 + pnpm
-- Docker & Docker Compose（可选，用于启动数据库）
+- Docker & Docker Compose（用于启动数据库）
 
 ### 1. 克隆项目
 
@@ -82,8 +101,7 @@ docker compose up -d
 ```bash
 cd backend
 
-# 创建环境变量文件
-# （将 .env.example 复制为 .env 并填写配置）
+# 创建环境变量文件（将 .env.example 复制为 .env 并填写配置）
 cp .env.example .env
 
 # 安装依赖
@@ -108,6 +126,26 @@ pnpm dev
 ```
 
 前端页面：启动后访问 [http://localhost:5173](http://localhost:5173)
+
+### 生产部署（Docker 全栈，可选）
+
+前后端均已容器化，通过 Compose profiles 区分环境——`up -d` 默认只起数据库（开发模式），加 `--profile prod` 拉起全栈：
+
+```bash
+# 1. 准备后端环境变量
+cp backend/.env.example backend/.env   # 填写 LLM_API_KEY 等
+
+# 2. 构建并启动全栈（postgres → backend → frontend 依赖顺序自动编排）
+docker compose --profile prod up -d --build
+
+# 3. 首次部署需构建向量索引（在宿主机或进容器执行一次）
+uv run python scripts/build_index.py
+```
+
+- 访问入口：`http://localhost`（nginx 托管前端 + `/api` 反向代理后端，SSE 已关闭缓冲）
+- `backend/Dockerfile`：uv 多阶段构建，仅携带虚拟环境与源码
+- `frontend/Dockerfile`：Node 构建 → nginx 托管 SPA，`try_files` 适配 Vue Router history 模式
+- 数据卷：`backend/data`（Chroma + BM25 索引）、`backend/models`（Embedding 模型）挂载自宿主机，重建容器不丢数据
 
 ### 5. 构建向量索引（可选）
 
@@ -134,17 +172,18 @@ uv run python scripts/evaluate.py --judge
 
 ```
 legal_mind/
-├── docker-compose.yml           # PostgreSQL + Redis
+├── docker-compose.yml           # PostgreSQL + Redis（prod profile 含前后端容器）
 ├── backend/
+│   ├── Dockerfile               # uv 多阶段构建
 │   ├── app/
 │   │   ├── api/                 # 路由处理器（auth, chat, documents, cases）
 │   │   ├── agents/              # LangGraph Agent 工作流
-│   │   │   ├── workflow.py      # StateGraph 主图编排
+│   │   │   ├── workflow.py      # StateGraph 主图编排（含 Self-Reflection 质量门控）
 │   │   │   ├── intent_agent.py  # 意图识别（Structured Output）
 │   │   │   ├── retrieval_agent.py # ReAct 检索子图
-│   │   │   ├── qa_agent.py      # 法律问答
+│   │   │   ├── qa_agent.py      # 法律问答（LCEL 管道 + 摘要压缩 + 质量评审）
 │   │   │   ├── document_agent.py # 文书生成
-│   │   │   └── human_loop.py    # HITL 意图确认节点
+│   │   │   └── human_loop.py    # HITL 信息收集节点
 │   │   ├── rag/                 # RAG 检索管线
 │   │   │   ├── embeddings.py    # BGE 中文 Embedding
 │   │   │   ├── vector_store.py  # Chroma 向量存储
@@ -153,15 +192,19 @@ legal_mind/
 │   │   ├── tools/               # LangChain Tool Calling
 │   │   │   └── search_tool.py   # search_cases Tool（参数校验 + 4 层错误处理）
 │   │   ├── llm/                 # LLM 集成
-│   │   │   ├── model_client.py  # LLM 客户端工厂
-│   │   │   ├── prompts.py       # 提示词模板
-│   │   │   └── checkpoint.py    # 对话状态持久化
+│   │   │   ├── model_client.py  # LLM 客户端工厂（fallback 容灾链）
+│   │   │   ├── prompts.py       # 提示词模板（QA/摘要/元数据/质量评审）
+│   │   │   ├── context_manager.py # 历史视图裁剪（防 Context 爆炸）
+│   │   │   ├── usage_tracker.py # Token 用量追踪（CallbackHandler + 请求级归集）
+│   │   │   └── checkpoint.py    # PostgresSaver 对话状态持久化
+│   │   ├── exceptions/          # 统一异常体系（RFC 9457 + TraceId 中间件）
 │   │   ├── models/              # Tortoise ORM 数据模型
 │   │   ├── services/            # 业务逻辑
 │   │   ├── db/                  # 数据库连接
 │   │   ├── utils/               # 工具函数
 │   │   ├── config.py            # Pydantic Settings 配置
-│   │   └── main.py              # 应用入口
+│   │   └── main.py              # 应用入口（lifespan 优雅启停）
+│   ├── Dockerfile               # uv 多阶段构建（Python 3.14-slim）
 │   ├── scripts/                 # 工具脚本
 │   │   ├── build_index.py       # 构建向量索引
 │   │   ├── evaluate.py          # RAGAS + 自定义评估
@@ -171,23 +214,24 @@ legal_mind/
 │   │   └── import_eval_data.py  # 评估数据导入
 │   ├── data/                    # 数据集
 │   │   └── legal_eval_dataset_v2.json  # 100 条标注评估集
-│   ├── test/                    # 测试
+│   ├── test/                    # 测试脚本
 │   └── pyproject.toml
 ├── frontend/
+│   ├── Dockerfile               # Node 构建 → nginx 托管（多阶段）
+│   ├── nginx.conf               # SPA 路由 + /api 反代（SSE 关闭缓冲）
 │   ├── src/
 │   │   ├── api/                 # API 客户端
 │   │   ├── components/          # UI 组件
 │   │   │   └── chat/
 │   │   │       ├── ChatSidebar.vue    # 聊天侧边栏
-│   │   │       ├── ChatMessage.vue    # 消息气泡（Markdown 渲染）
+│   │   │       ├── ChatMessage.vue    # 消息气泡（Markdown + 阶段时间线）
 │   │   │       ├── ChatInput.vue      # 消息输入框
-│   │   │       └── InterruptCard.vue   # HITL 交互卡片
+│   │   │       └── InterruptCard.vue  # HITL 交互卡片
 │   │   ├── views/               # 页面视图
 │   │   ├── stores/              # 状态管理
 │   │   └── router/              # 路由配置
 │   └── package.json
 ├── .gitignore
-├── CLAUDE.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── README.md
@@ -210,14 +254,11 @@ legal_mind/
 | `/api/cases/search`                | GET    | 搜索案例                 |
 | `/api/cases/list`                  | GET    | 获取案例列表             |
 
-## 🧪 运行测试
+## 🧪 测试
 
-```bash
-cd backend
-uv run pytest             # 运行全部测试
-uv run pytest -v          # 详细输出
-uv run pytest test/test_rag.py -v  # 单个测试文件
-```
+当前测试以端到端验证脚本为主（覆盖流式对话、HITL 恢复、Token 落库等场景），位于 `backend/test/`。
+
+分层测试体系（pytest 单元测试 / Fake LLM 图逻辑测试 / API 集成测试）在路线图中，欢迎贡献。
 
 ## 📊 评估指标
 
@@ -233,12 +274,11 @@ uv run pytest test/test_rag.py -v  # 单个测试文件
 
 - [ ] 多级缓存体系（Embedding 缓存 + 语义缓存）
 - [ ] 限流与熔断（Token Bucket + 熔断三态）
-- [ ] PostgresSaver 持久化 Checkpoint
 - [ ] 异步任务队列（Redis Stream + Worker）
-- [ ] astream_events 分阶段进度推送
-- [ ] Self-Reflection 质量评估节点
 - [ ] OpenTelemetry 全链路追踪
+- [ ] 分层测试体系（pytest 单元 / Fake LLM 图逻辑 / API 集成）
 - [ ] CI/CD 自动化测试与部署
+- [x] 前后端容器化部署（多阶段构建 + Nginx 反代，Compose profiles 区分环境）
 - [ ] 支持多模态输入（图片/PDF 证据上传）
 
 ## 📄 许可证

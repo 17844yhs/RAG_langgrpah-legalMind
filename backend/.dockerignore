@@ -1,0 +1,12 @@
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+# 数据与模型运行时通过 volume 挂载，不打进镜像
+data/
+models/
+# 敏感文件与本地产物
+.env
+test/
+logs/

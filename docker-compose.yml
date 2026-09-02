@@ -1,4 +1,5 @@
 services:
+  # ── 基础设施（开发/部署共用，docker compose up -d 即起）──
   postgres:
     image: postgres:16-alpine
     environment:
@@ -24,6 +25,46 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes
     restart: unless-stopped
+
+  # ── 以下为生产部署服务（--profile prod 时才构建启动）──
+  backend:
+    build: ./backend
+    profiles: ["prod"]
+    env_file:
+      - backend/.env            # 先 cp .env.example .env 并填好 LLM_API_KEY
+    environment:
+      # 容器网络内用服务名替代 localhost
+      DATABASE_URL: postgresql://legal_user:legal_pass@postgres:5432/legal_db
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "False"
+    volumes:
+      - ./backend/data:/app/data        # Chroma 向量库 + BM25 索引持久化（宿主机构建一次索引即可）
+      - ./backend/models:/app/models    # 本地 Embedding 模型，避免运行时联网下载
+    ports:
+      - "8000:8000"                     # 直连 API 调试用；仅走 nginx 可删除
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s                 # 首次启动要加载 Embedding/Reranker 模型，给足时间
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    profiles: ["prod"]
+    ports:
+      - "80:80"                         # nginx 入口：静态资源 + /api 反向代理
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
