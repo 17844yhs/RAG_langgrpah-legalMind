@@ -10,6 +10,7 @@
 ### 新增
 
 - **🧹 Context 管理 — 视图裁剪 + 自动摘要压缩（防 Context 爆炸）**：checkpoint 全量保留 messages（HITL resume 依赖），LLM 输入走视图裁剪（字符预算 6000，轮次边界对齐，当前问题永不丢）；落入裁剪区的内容超 2000 字触发一次 LLM 增量摘要压缩（结构化事实提取：金额/期限/法条/时效），摘要存 `state.context_summary` + `summarized_count` 游标持久化，下轮只压新增量；`_qa_node` 与 `info_gathering` 两个接入点。E2E：32 条消息 16041 字 → 摘要覆盖前 26 条且关键事实零丢失，3 轮对话无回归
+- **🔗 LCEL 统一管道重构（QA Agent）**：`qa_agent.py` 收敛为三条 LCEL 链——`qa_chain`（RunnableLambda 组装消息 | llm，ainvoke/astream 统一走管道）、`summarize_chain`（PromptTemplate | llm | StrOutputParser）、`meta_chain`（预处理 | meta_llm）；消息组装/模板渲染自动进 LangSmith trace，输出保持 AIMessageChunk 流式语义不变
 - **💰 Token 成本追踪（Custom Callbacks）**：`BaseCallbackHandler.on_llm_end` 采集每次 LLM 调用的用量 → 带 traceId 结构化日志（模型名/in/out/total/成本估算/延迟）；ContextVar 桥接纯 ASGI 中间件的 traceId；挂载在模型构造参数，方法代理零影响
 - **📊 Token 用量全链路呈现**：请求级累计器（`RequestUsage` + ContextVar，一次请求所有 LLM 调用自动归集）→ SSE `usage` 事件（interrupt 打断的对话同样照发）→ `chat_messages.usage JSONB` 落库（迁移 `0003_add_message_usage`）→ 前端消息下方展示"消耗 N tokens（输入/输出/调用次数）"。E2E 验证 SSE/DB/API 三处数据一致
 - **📡 分阶段事件推送（Stream Mode 多路复用）**：`stream_mode=["messages", "updates"]` 同时订阅 token 流与节点完成增量，workflow 层归一化 `token`/`stage` 两类事件——SSE 实时推送"正在理解您的问题 → 识别为：法律咨询 → 正在检索相关案例 → 找到 N 条相关案例 → 正在生成回答"进度（running/done 状态），前端渲染进度行、正文输出后自动隐藏；interrupt 检测逻辑零改动

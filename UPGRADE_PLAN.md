@@ -1027,7 +1027,9 @@ graph.add_edge("expert", "synthesize")
 
 ### 8.3 LangChain 通用概念
 
-#### 8.3.1 LCEL（LangChain Expression Language）统一管道 【概念统一】
+#### 8.3.1 LCEL（LangChain Expression Language）统一管道 【概念统一】✅（2026-09-01 落地）
+
+> **落地记录**：`qa_agent.py` 收敛为三条 LCEL 链——`qa_chain`（RunnableLambda 组装消息 | llm，ainvoke/astream 统一走管道）、`summarize_chain`（PromptTemplate | llm | StrOutputParser）、`meta_chain`（RunnableLambda 预处理 | meta_llm）。消息组装/模板渲染自动进 LangSmith trace，输出保持 AIMessageChunk 流式语义不变。详见 优化项目.md 10.7。
 
 **当前状态**：项目中 LCEL 用法不统一：
 
@@ -1170,7 +1172,7 @@ def evaluate_node(state):
 | P1     | Send API 并行专家分发       | LangGraph | 3h    | ⭐⭐⭐⭐⭐ 区分度最高    | ✅ |
 | P2     | astream_events 分阶段进度   | LangGraph | 2h    | ⭐⭐⭐ 产品体验          | ✅（stream_mode 复用实现） |
 | P2     | with_fallbacks 容灾         | LangChain | 1h    | ⭐⭐ 工程成熟度          | ✅ |
-| P2     | QA Agent LCEL 重构          | LangChain | 1h    | ⭐⭐ 代码统一性          |    |
+| P2     | QA Agent LCEL 重构          | LangChain | 1h    | ⭐⭐ 代码统一性          | ✅ |
 | P3     | HybridRetriever 单例        | 性能      | 30min | ⭐                       | ✅ |
 | P3     | Callbacks Token 追踪        | LangChain | 2h    | ⭐⭐ 成本意识            | ✅ |
 | P3     | 文书生成流式化              | 性能      | 30min | ⭐                       | ✅ |

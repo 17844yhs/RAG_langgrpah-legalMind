@@ -4,8 +4,9 @@ from langchain_core.messages.base import BaseMessage
 import logging
 from typing import List, Dict, Optional, Literal
 from pydantic import BaseModel, Field
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
 from app.config import settings
@@ -40,15 +41,33 @@ class QAAgent:
             .with_structured_output(LegalAnswerMeta, method="function_calling")
             .with_retry(stop_after_attempt=2)
         )
+        # ── LCEL 统一管道：一切皆 Runnable，自动获得 ainvoke/astream/batch 能力，
+        #    每个中间步骤（消息组装/提示模板）自动进 LangSmith trace ──
+        # QA 主链：消息组装 → LLM（输出 AIMessageChunk，保留打字机流式语义）
+        self.qa_chain = (
+            RunnableLambda(
+                lambda x: self.build_messages(x["cases"], x["messages"], x.get("summary"))
+            )
+            | self.llm
+        )
+        # 历史摘要链：PromptTemplate → LLM → 字符串解析
+        self.summarize_chain = (
+            PromptTemplate.from_template(HISTORY_SUMMARIZE_PROMPT)
+            | self.llm
+            | StrOutputParser()
+        )
+        # 元数据抽取链：文本预处理 → 结构化 LLM（重试已内置 meta_llm）
+        self.meta_chain = (
+            RunnableLambda(lambda text: META_EXTRACT_PROMPT.format(answer=text[:6000]))
+            | self.meta_llm
+        )
 
     async def extract_meta(self, answer_text: str) -> Optional[LegalAnswerMeta]:
         """从完整回答文本抽取元数据。失败返回 None（增强功能，不阻塞主流程）。"""
         if not answer_text or len(answer_text) < 20:
             return None
         try:
-            result = await self.meta_llm.ainvoke(
-                META_EXTRACT_PROMPT.format(answer=answer_text[:6000])
-            )
+            result = await self.meta_chain.ainvoke(answer_text)
             if result is None:  # function_calling 模式拒答返回 None 而非抛异常
                 raise ValueError("structured output returned None")
             return result
@@ -88,12 +107,13 @@ class QAAgent:
             for m in dropped
         )
         try:
-            resp = await self.llm.ainvoke(HISTORY_SUMMARIZE_PROMPT.format(
-                prev_summary=prev_summary or "无",
-                history=history_text,
-                max_chars=settings.SUMMARY_MAX_CHARS,
-            ))
-            new_summary = (resp.content or "").strip()
+            new_summary = (
+                await self.summarize_chain.ainvoke({
+                    "prev_summary": prev_summary or "无",
+                    "history": history_text,
+                    "max_chars": settings.SUMMARY_MAX_CHARS,
+                })
+            ).strip()
             return new_summary or prev_summary or ""
         except Exception:
             logger.exception("历史摘要压缩失败，降级为仅裁剪")
@@ -101,14 +121,18 @@ class QAAgent:
 
     async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None) ->List[BaseMessage]:
 
-        response = await self.llm.ainvoke(self.build_messages(cases,messages,summary))
+        response = await self.qa_chain.ainvoke(
+            {"cases": cases, "messages": messages or [], "summary": summary}
+        )
 
         sources = self._extract_sources(cases)
 
         return {"answer":response,"sources":sources}
 
     async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None):
-        async for chunk in self.llm.astream(self.build_messages(cases,messages,summary)):
+        async for chunk in self.qa_chain.astream(
+            {"cases": cases, "messages": messages or [], "summary": summary}
+        ):
             yield chunk
     
     def _format_cases(self,cases:List[Dict]) ->str:
