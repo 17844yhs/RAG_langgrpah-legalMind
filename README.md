@@ -264,11 +264,12 @@ legal_mind/
 |---|---|---|---|
 | `tests/unit/*` | 单元（纯函数） | 白盒（内部边界） | 零 mock |
 | `tests/integration/test_workflow_graph.py` | 集成（真实图引擎+路由+状态合并） | 白盒（断言内部状态） | LLM/检索/checkpoint 全换 Fake |
+| `tests/api/*` | 集成（真实路由+中间件+ORM） | 黑盒为主（HTTP 契约），落库验证为灰盒 | 独立测试库 + workflow 换 Fake |
 | `test/`（手跑脚本） | 端到端（真实 LLM 全链路） | 黑盒（只看输入输出） | 无，真依赖 |
 
 ```bash
 cd backend
-uv run pytest tests -v        # 32 个用例：单元 + 图逻辑
+uv run pytest tests -v        # 46 个用例：单元 + 图逻辑 + API（需 PG，未启动时自动 skip API 层）
 ```
 
 - **单元测试**（[tests/unit/](backend/tests/unit/)）：视图裁剪轮次边界、Token 用量聚合双来源、错误码注册表完整性、RFC 9457 响应构造
@@ -291,7 +292,6 @@ uv run pytest tests -v        # 32 个用例：单元 + 图逻辑
 - [ ] 限流与熔断（Token Bucket + 熔断三态）
 - [ ] 异步任务队列（Redis Stream + Worker）
 - [ ] OpenTelemetry 全链路追踪
-- [ ] API 集成测试（httpx + 独立测试库）
 - [ ] CI/CD 自动化测试与部署
 - [x] 前后端容器化部署（多阶段构建 + Nginx 反代，Compose profiles 区分环境）
 - [ ] 支持多模态输入（图片/PDF 证据上传）

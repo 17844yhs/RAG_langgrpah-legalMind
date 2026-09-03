@@ -9,7 +9,7 @@
 
 ### 新增
 
-- **🧪 分层测试体系（pytest）**：32 个用例零 LLM 成本秒级回归——单元层（视图裁剪轮次边界/Token 聚合双来源/错误码注册表完整性/RFC 9457 构造）+ 图逻辑层（MemorySaver + Fake 组件替换全部 LLM 依赖，覆盖质量门控三路径、草稿不入对话历史、意图路由、HITL interrupt/resume）；`backend/tests/` 分层组织，`uv run pytest tests` 一键运行
+- **🧪 分层测试体系（pytest）**：46 个用例秒级回归——单元层（视图裁剪轮次边界/Token 聚合双来源/错误码注册表完整性/RFC 9457 构造）+ 图逻辑层（MemorySaver + Fake 组件替换全部 LLM 依赖，覆盖质量门控三路径、草稿不入对话历史、意图路由、HITL interrupt/resume）+ API 集成层（httpx 黑盒打真实路由：认证链路/RFC 9457 错误契约/SSE 事件序列/traceId 中间件，独立 legal_db_test 测试库每用例重建，PG 不可达自动 skip）；`backend/tests/` 分层组织，`uv run pytest tests` 一键运行
 - **🐳 全栈容器化部署**：`backend/Dockerfile`（uv 多阶段构建，仅携带虚拟环境+源码）+ `frontend/Dockerfile`（Node 构建 → nginx 托管 SPA）+ `nginx.conf`（SPA 路由回退 + `/api` 反代，SSE 关闭缓冲）；`docker-compose.yml` 通过 profiles 区分环境——开发 `up -d` 只起数据库，部署 `--profile prod up -d --build` 全栈拉起（postgres healthcheck → backend → frontend 依赖编排），Chroma/BM25 索引与 Embedding 模型走宿主机 volume 持久化
 - **🧹 Context 管理 — 视图裁剪 + 自动摘要压缩（防 Context 爆炸）**：checkpoint 全量保留 messages（HITL resume 依赖），LLM 输入走视图裁剪（字符预算 6000，轮次边界对齐，当前问题永不丢）；落入裁剪区的内容超 2000 字触发一次 LLM 增量摘要压缩（结构化事实提取：金额/期限/法条/时效），摘要存 `state.context_summary` + `summarized_count` 游标持久化，下轮只压新增量；`_qa_node` 与 `info_gathering` 两个接入点。E2E：32 条消息 16041 字 → 摘要覆盖前 26 条且关键事实零丢失，3 轮对话无回归
 - **🔗 LCEL 统一管道重构（QA Agent）**：`qa_agent.py` 收敛为三条 LCEL 链——`qa_chain`（RunnableLambda 组装消息 | llm，ainvoke/astream 统一走管道）、`summarize_chain`（PromptTemplate | llm | StrOutputParser）、`meta_chain`（预处理 | meta_llm）；消息组装/模板渲染自动进 LangSmith trace，输出保持 AIMessageChunk 流式语义不变
