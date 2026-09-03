@@ -286,6 +286,31 @@ uv run pytest tests -v        # 46 个用例：单元 + 图逻辑 + API（需 PG
 | 自定义评估 忠实度      | 0.82   |
 | 评估数据集规模         | 100 条 |
 
+## 🚦 性能压测（k6 实测）
+
+> 压测脚本：[loadtest/chat_stream.js](loadtest/chat_stream.js)，双模式（`infra` 基础设施基线 / `chat` 真实业务链路）。完整流程与报告：[loadtest/README.md](loadtest/README.md)。环境：Windows 本机单实例 uvicorn（2 worker）+ Docker PostgreSQL/Redis，LLM 为 DeepSeek 上游 API。
+
+### 基础设施基线（GET /health，无 LLM）
+
+| 指标 | 数值 |
+| --- | --- |
+| 吞吐（含 100ms think time） | **458 req/s** |
+| 延迟 p95 / avg | **2.24ms / 1.01ms** |
+| 并发 | 100 VU 持续 3 分钟 |
+| 错误率 | 0%（82,485 次请求） |
+
+### SSE 流式问答链路（POST /api/chat/stream，真实 RAG + LLM）
+
+| 指标 | 数值 |
+| --- | --- |
+| 完整流（检索+生成+元数据+质量门控） | 206 条，0 失败 |
+| 首 SSE 事件延迟（TTFB）p90 / avg | **57.6ms / 28.3ms** |
+| 整条流总时长 avg / p90 / p95 / max | **8.41s / 13.8s / 16.8s / 24.9s** |
+| 流式吞吐 @15 并发 | ≈ 0.88 条/s（53 条/min） |
+| token 消耗 | 362,084（≈1,758 tokens/条，含生成+元数据+质量自检全部 LLM 调用） |
+
+**瓶颈分析**：基础设施层（FastAPI + 中间件栈）p95 仅 2ms、458 QPS，远非瓶颈；流式链路 8-25s 的耗时**几乎全部在 DeepSeek 上游生成**（检索占 1-2s）。结论：单实例应用栈余量充足，扩容重心在 LLM 侧（语义缓存 / 限流排队）——这正是路线图中缓存与限流两项的实证依据。
+
 ## 🗺️ 路线图
 
 - [ ] 多级缓存体系（Embedding 缓存 + 语义缓存）
