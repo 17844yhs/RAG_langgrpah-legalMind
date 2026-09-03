@@ -25,3 +25,14 @@ dependencies = [
     "tortoise-orm[asyncpg]>=0.24",
     "tzdata==2026.2",
 ]
+
+[tool.pytest.ini_options]
+# 只收集分层测试目录，避免把 test/ 下的手跑 E2E 脚本当用例收集
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

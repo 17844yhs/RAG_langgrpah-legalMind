@@ -256,9 +256,24 @@ legal_mind/
 
 ## 🧪 测试
 
-当前测试以端到端验证脚本为主（覆盖流式对话、HITL 恢复、Token 落库等场景），位于 `backend/test/`。
+分层测试策略：**纯逻辑白盒单测 + Fake LLM 图逻辑测试**（不花 token、秒级回归），LLM 边界用 stub 替换、只测确定的部分。
 
-分层测试体系（pytest 单元测试 / Fake LLM 图逻辑测试 / API 集成测试）在路线图中，欢迎贡献。
+三维度定位（级别=测多大 / 方法=什么视角 / 手段=怎么控不确定性）：
+
+| 文件 | 级别 | 方法 | 手段 |
+|---|---|---|---|
+| `tests/unit/*` | 单元（纯函数） | 白盒（内部边界） | 零 mock |
+| `tests/integration/test_workflow_graph.py` | 集成（真实图引擎+路由+状态合并） | 白盒（断言内部状态） | LLM/检索/checkpoint 全换 Fake |
+| `test/`（手跑脚本） | 端到端（真实 LLM 全链路） | 黑盒（只看输入输出） | 无，真依赖 |
+
+```bash
+cd backend
+uv run pytest tests -v        # 32 个用例：单元 + 图逻辑
+```
+
+- **单元测试**（[tests/unit/](backend/tests/unit/)）：视图裁剪轮次边界、Token 用量聚合双来源、错误码注册表完整性、RFC 9457 响应构造
+- **图逻辑测试**（[tests/integration/](backend/tests/integration/)）：MemorySaver 替代 PG checkpoint，Fake 组件替换 LLM——覆盖质量门控三路径（通过/带反馈重试/额度用尽放行）、草稿不入对话历史、意图路由（qa/search/document）、HITL interrupt/resume
+- 端到端验证脚本（真实 LLM 全链路：流式对话、HITL 恢复、Token 落库）位于 `backend/test/`
 
 ## 📊 评估指标
 
@@ -276,7 +291,7 @@ legal_mind/
 - [ ] 限流与熔断（Token Bucket + 熔断三态）
 - [ ] 异步任务队列（Redis Stream + Worker）
 - [ ] OpenTelemetry 全链路追踪
-- [ ] 分层测试体系（pytest 单元 / Fake LLM 图逻辑 / API 集成）
+- [ ] API 集成测试（httpx + 独立测试库）
 - [ ] CI/CD 自动化测试与部署
 - [x] 前后端容器化部署（多阶段构建 + Nginx 反代，Compose profiles 区分环境）
 - [ ] 支持多模态输入（图片/PDF 证据上传）
