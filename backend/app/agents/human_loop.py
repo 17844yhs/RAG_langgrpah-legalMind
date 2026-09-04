@@ -108,7 +108,10 @@ async def info_gathering(state):
         return {"info_sufficient": True}
 
     # 信息充分 → 放行
-    if result.sufficient:
+    # 兜底守卫：模型偶发返回 sufficient=False 但 question 为空（function_calling 参数缺失，
+    # question 落到默认值 ""），此时没有可追问的内容，降级放行——宁可少追问一轮，
+    # 也不能把空问题 interrupt 给前端（用户会看到空白澄清卡片）
+    if result.sufficient or not result.question.strip():
         return {"info_sufficient": True}
 
     # 不充分 → interrupt 追问（前端收到后渲染 InterruptCard）

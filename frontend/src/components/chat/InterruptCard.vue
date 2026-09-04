@@ -9,20 +9,20 @@ const interruptType = computed(() => chat.pendingInterrupt?.type || '')
 const question = computed(() => {
   const data = chat.pendingInterrupt
   if (!data) return ''
-  if (data.type === 'confirm_intent') return data.question
   if (data.type === 'need_more_info') return data.hint
-  return ''
+  // confirm_intent / clarify_info 都携带 question 字段
+  return data.question || ''
 })
 
 const icon = computed(() => {
   if (interruptType.value === 'confirm_intent') return '?'
-  if (interruptType.value === 'need_more_info') return '+'
+  if (interruptType.value === 'clarify_info' || interruptType.value === 'need_more_info') return '+'
   return '!'
 })
 
 const placeholder = computed(() => {
   if (interruptType.value === 'confirm_intent') return '请补充说明您的需求...'
-  if (interruptType.value === 'need_more_info') return '请补充案件相关信息...'
+  if (interruptType.value === 'clarify_info' || interruptType.value === 'need_more_info') return '请回答上方问题...'
   return '请输入...'
 })
 
