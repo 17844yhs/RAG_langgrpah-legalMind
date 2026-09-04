@@ -43,6 +43,8 @@ Thumbs.db
 UPGRADE_PLAN.md
 # Vector store local data (matches at any level, e.g. backend/data/chroma/)
 data/chroma/
+# BM25 索引（可由 scripts/build_index.py 重建，不进版本库）
+backend/data/bm25_index.pkl
 # Local embedding models (large files, entire directory)
 backend/models/
 # Local config

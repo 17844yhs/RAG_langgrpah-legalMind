@@ -63,7 +63,6 @@ class QAAgent:
         # ── LCEL 统一管道：一切皆 Runnable，自动获得 ainvoke/astream/batch 能力，
         #    每个中间步骤（消息组装/提示模板）自动进 LangSmith trace ──
         # QA 主链：消息组装 → LLM（输出 AIMessageChunk，保留打字机流式语义）
-        # [旧写法] answer/stream_answer 内手动：self.llm.ainvoke/astream(self.build_messages(cases, messages, summary))
         self.qa_chain = (
             RunnableLambda(
                 lambda x: self.build_messages(
@@ -73,14 +72,12 @@ class QAAgent:
             | self.llm
         )
         # 历史摘要链：PromptTemplate → LLM → 字符串解析
-        # [旧写法] summarize_history 内手动：resp = await self.llm.ainvoke(HISTORY_SUMMARIZE_PROMPT.format(prev_summary=..., history=..., max_chars=...)); new_summary = (resp.content or "").strip()
         self.summarize_chain = (
             PromptTemplate.from_template(HISTORY_SUMMARIZE_PROMPT)
             | self.llm
             | StrOutputParser()
         )
         # 元数据抽取链：文本预处理 → 结构化 LLM（重试已内置 meta_llm）
-        # [旧写法] extract_meta 内手动：result = await self.meta_llm.ainvoke(META_EXTRACT_PROMPT.format(answer=answer_text[:6000]))
         self.meta_chain = (
             RunnableLambda(lambda text: META_EXTRACT_PROMPT.format(answer=text[:6000]))
             | self.meta_llm
@@ -91,7 +88,6 @@ class QAAgent:
         if not answer_text or len(answer_text) < 20:
             return None
         try:
-            # [旧写法] result = await self.meta_llm.ainvoke(META_EXTRACT_PROMPT.format(answer=answer_text[:6000]))
             result = await self.meta_chain.ainvoke(answer_text)
             if result is None:  # function_calling 模式拒答返回 None 而非抛异常
                 raise ValueError("structured output returned None")
@@ -159,8 +155,6 @@ class QAAgent:
             for m in dropped
         )
         try:
-            # [旧写法] resp = await self.llm.ainvoke(HISTORY_SUMMARIZE_PROMPT.format(prev_summary=..., history=..., max_chars=...))
-            #          new_summary = (resp.content or "").strip()
             new_summary = (
                 await self.summarize_chain.ainvoke({
                     "prev_summary": prev_summary or "无",
@@ -174,8 +168,6 @@ class QAAgent:
             return prev_summary or ""
 
     async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None,reflection_feedback:str=None) ->List[BaseMessage]:
-
-        # [旧写法] response = await self.llm.ainvoke(self.build_messages(cases, messages, summary))
         response = await self.qa_chain.ainvoke(
             {"cases": cases, "messages": messages or [], "summary": summary,
              "reflection_feedback": reflection_feedback}
@@ -186,7 +178,6 @@ class QAAgent:
         return {"answer":response,"sources":sources}
 
     async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None,reflection_feedback:str=None):
-        # [旧写法] async for chunk in self.llm.astream(self.build_messages(cases, messages, summary)):
         async for chunk in self.qa_chain.astream(
             {"cases": cases, "messages": messages or [], "summary": summary,
              "reflection_feedback": reflection_feedback}
