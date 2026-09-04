@@ -10,6 +10,7 @@
   <img src="https://img.shields.io/badge/Vue_3-3.5-4FC08D?logo=vue.js" alt="Vue 3"/>
   <img src="https://img.shields.io/badge/LangGraph-1.2-FF6F00" alt="LangGraph"/>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/>
+  <a href="https://github.com/17844yhs/RAG_langgrpah-legalMind/actions/workflows/ci.yml"><img src="https://github.com/17844yhs/RAG_langgrpah-legalMind/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
 </p>
 
 <p align="center">
@@ -317,7 +318,7 @@ uv run pytest tests -v        # 46 个用例：单元 + 图逻辑 + API（需 PG
 - [ ] 限流与熔断（Token Bucket + 熔断三态）
 - [ ] 异步任务队列（Redis Stream + Worker）
 - [ ] OpenTelemetry 全链路追踪
-- [ ] CI/CD 自动化测试与部署
+- [x] CI/CD（GitHub Actions：push 跑全量 pytest + tag 出 Docker 镜像推 GHCR）
 - [x] 前后端容器化部署（多阶段构建 + Nginx 反代，Compose profiles 区分环境）
 - [ ] 支持多模态输入（图片/PDF 证据上传）
 

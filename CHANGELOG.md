@@ -9,6 +9,7 @@
 
 ### 新增
 
+- **⚙️ CI/CD 流水线（GitHub Actions）**：`.github/workflows/ci.yml` 声明式合同——push/PR 触发 CI（起 PostgreSQL service 容器，46 个 pytest 用例全量真跑，含 API 集成测试）；`v*` tag 触发 CD 交付半环（测试通过后构建 backend 镜像推送 GHCR，部署终点站为 compose `--profile prod`）。README 挂 CI badge
 - **🚦 k6 性能压测（双模式）**：`loadtest/chat_stream.js`——`infra` 基础设施基线（458 req/s、p95 2.24ms、100 VU 8.2 万请求零错误）+ `chat` 真实 SSE 流式链路（206 条流 0 失败，首事件 p90 57.6ms，整流 p90 13.8s，单条均耗 1,758 tokens）。实测瓶颈在 DeepSeek 上游生成而非应用栈，为路线图"多级缓存 + 限流排队"提供实证。完整报告见 `loadtest/README.md`。踩坑：k6 v2 移除内置 SSE 模块，最终用 `http.post` 完整消费流（`timings.waiting`=首字节，事后解析 SSE 响应体），零扩展依赖
 
 ## [0.3.0] - 2026-08-27

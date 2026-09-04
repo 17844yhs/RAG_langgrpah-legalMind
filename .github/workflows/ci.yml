@@ -1,0 +1,92 @@
+# CI/CD 流水线 — 声明式合同：GitHub 按本文件声明的触发器与步骤自动执行
+#
+# CI（每次 push/PR）：
+#   backend-tests → 起 PostgreSQL service 容器 → uv 同步依赖 → 全量 pytest
+#   （测试体系设计自带环境适配：单元/图逻辑测试零外部依赖；API 测试
+#    探测到 PG 可达则全量运行 —— CI 里 PG service 让 46 个用例全部真跑）
+#
+# CD 交付半环（打 v* tag 时）：
+#   docker-image → 测试通过后构建 Docker 镜像推送 GHCR
+#   （部署终点站是仓库里的 docker-compose --profile prod：服务器 pull 即上线；
+#    当前无云服务器，故 CD 只自动化到"镜像交付"为止）
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  tags:
+    - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── CI：质量门 ──
+  backend-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: legal_user
+          POSTGRES_PASSWORD: legal_pass
+          POSTGRES_DB: legal_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legal_user -d legal_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 与本地 .env 同构：pydantic-settings 直接读环境变量
+      DATABASE_URL: postgresql://legal_user:legal_pass@localhost:5432/legal_db
+      SECRET_KEY: ci-test-secret-key
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Sync dependencies (incl. dev group)
+        run: uv sync --group dev
+
+      - name: Run tests
+        run: uv run pytest tests -v --tb=short
+
+  # ── CD 交付半环：tag 触发，测试通过后出镜像 ──
+  docker-image:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: backend-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/legalmind-backend:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
