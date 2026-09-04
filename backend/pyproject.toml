@@ -30,6 +30,8 @@ dependencies = [
 # 只收集分层测试目录，避免把 test/ 下的手跑 E2E 脚本当用例收集
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# 把 rootdir（backend/）加入 sys.path，保证 `import app.*` 在任意平台/CI 生效
+pythonpath = ["."]
 
 [dependency-groups]
 dev = [
