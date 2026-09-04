@@ -44,6 +44,8 @@ jobs:
       # 与本地 .env 同构：pydantic-settings 直接读环境变量
       DATABASE_URL: postgresql://legal_user:legal_pass@localhost:5432/legal_db
       SECRET_KEY: ci-test-secret-key
+      # 测试全程用 Fake 替换 LLM（零网络调用），key 仅满足客户端构造校验
+      LLM_API_KEY: ci-dummy-key
     defaults:
       run:
         working-directory: backend
