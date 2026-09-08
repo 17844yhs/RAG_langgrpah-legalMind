@@ -11,8 +11,11 @@ logger = logging.getLogger("app.agent")
 
 class IntentResult(BaseModel):
     """意图识别结构化输出"""
-    intent: Literal["qa", "document", "search"] = Field(
-        description="用户意图类型：qa=法律问答, document=文书生成, search=案例检索"
+    intent: Literal["qa", "document", "search", "chitchat"] = Field(
+        description=(
+            "用户意图类型：qa=法律问答, document=文书生成, search=案例检索, "
+            "chitchat=问候/寒暄/无实质法律内容的闲聊（如'你好''谢谢''你是谁'）"
+        )
     )
     confidence: float = Field(
         description="识别置信度，0-1之间。如果对用户意图不确定，请给出较低分数",
@@ -46,7 +49,9 @@ class IntentAgent:
         """
         try:
             result = await self.structured_llm.ainvoke(
-                f"分析用户问题并判断意图。\n用户问题：{query}"
+                f"分析用户问题并判断意图。\n"
+                f"注意：问候、寒暄、感谢、无实质法律内容的闲聊应归类为 chitchat。\n"
+                f"用户问题：{query}"
             )
             # function_calling 模式下模型拒答会返回 None 而非抛异常
             if result is None:

@@ -132,9 +132,13 @@ async def agent_node(state: RetrievalState) -> dict:
         "如果首次检索结果不足，请调整查询关键词或放宽过滤条件重新检索。"
     ))
 
-    # 首轮只有 system + human，后续轮追加 messages 保留上下文
+    # 首轮只有 system + human；retry 轮的消息链已含历史 ToolMessage 和
+    # evaluate_node 注入的反思反馈，不再重复追加 query——
+    # 原话重发会诱导 LLM 用同样参数原样重试
     existing = [m for m in state.get("messages", []) if not isinstance(m, SystemMessage)]
-    invoke_messages = [system] + existing + [HumanMessage(content=query)]
+    invoke_messages = [system] + existing
+    if not existing:
+        invoke_messages.append(HumanMessage(content=query))
 
     response = await llm.ainvoke(invoke_messages)
     return {
@@ -160,8 +164,17 @@ def evaluate_node(state: RetrievalState) -> dict:
         return {"retrieved_cases": cases, "status": "done"}
 
     # 还没重试够，自动再来一轮
+    # 注入反思反馈：把"结果被判定为不足"这个结论显式传回 LLM——
+    # 它虽然看得见上轮 ToolMessage，但不知道判定标准，可能觉得 2 条就够用
     if retry < 2:
-        return {"retrieved_cases": cases, "status": "retry"}
+        return {
+            "retrieved_cases": cases,
+            "status": "retry",
+            "messages": [HumanMessage(content=(
+                f"系统判定：上轮检索仅返回 {count} 条相关案例，未达 3 条的可用标准，"
+                "请调整策略重新检索——换一组关键词、放宽 court/year 过滤，或改用其他案由类别。"
+            ))],
+        }
 
     # interrupt 次数耗尽 → 强制放行（防死循环，兜底返回已有结果）
     if interrupt_count >= MAX_INTERRUPT_ROUNDS:
@@ -181,12 +194,17 @@ def evaluate_node(state: RetrievalState) -> dict:
         "interrupt_round": interrupt_count + 1,
     })
 
-    # resume 后拿到用户补充信息，标记重试 + interrupt 次数 +1
+    # resume 后拿到用户补充信息：反馈 + 补充合并为一条消息注入链
+    # （supplement 走 messages 进上下文，reformulated_query 仅作状态留存）
     return {
         "retrieved_cases": cases,
         "status": "retry",
         "reformulated_query": state["query"] + " " + user_supplement,
         "interrupt_count": interrupt_count + 1,
+        "messages": [HumanMessage(content=(
+            f"系统判定：自动检索 {retry} 轮仅找到 {count} 条相关案例，结果不足。\n"
+            f"用户补充了以下信息，请结合它调整检索参数：\n{user_supplement}"
+        ))],
     }
 
 

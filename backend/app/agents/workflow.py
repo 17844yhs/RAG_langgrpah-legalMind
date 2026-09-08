@@ -1,6 +1,7 @@
 """LangGraph 工作流编排 — 定义 Agent 之间的协作流程（含 Human-in-the-Loop）"""
 import json
 import logging
+import random
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
 from langgraph.types import Command
@@ -63,13 +64,17 @@ class LegalMindWorkflow:
         workflow.add_node("qa_generation", self._qa_node)
         workflow.add_node("quality_gate", self._quality_gate_node)  # Self-Reflection 质量门控
         workflow.add_node("document_generation", self._document_node)
+        workflow.add_node("chitchat_reply", self._chitchat_node)  # 问候快速通道（0 次 LLM）
         workflow.add_node("final_output", self._output_node)
 
-        # 添加图结构 
-        # intent_recognition → check_intent → info_gathering（自循环）→ 路由
+        # 添加图结构
+        # intent_recognition → check_intent →（chitchat 快速通道 | info_gathering 自循环）→ 路由
         workflow.set_entry_point("intent_recognition")
         workflow.add_edge("intent_recognition", "check_intent")
-        workflow.add_edge("check_intent", "info_gathering")
+        workflow.add_conditional_edges("check_intent", self._route_after_check, {
+            "chitchat": "chitchat_reply",   # 高置信问候 → 跳过信息收集/检索/质量门
+            "continue": "info_gathering",
+        })
 
         # info_gathering 自循环：info_sufficient=False → 回自己；True → 按意图路由
         workflow.add_conditional_edges("info_gathering", self._route_after_info, {
@@ -93,6 +98,7 @@ class LegalMindWorkflow:
             "pass": "final_output",
         })
         workflow.add_edge("document_generation", "final_output")
+        workflow.add_edge("chitchat_reply", "final_output")
         workflow.add_edge("final_output", END)
 
         return workflow.compile(checkpointer=get_checkpointer())
@@ -192,6 +198,22 @@ class LegalMindWorkflow:
             "messages": [AIMessage(content=content)],
         }
 
+    # 问候/闲聊快速通道：规则模板直接回复，全程仅意图识别 1 次 LLM 调用
+    # （对比 qa 路径的 4-6 次：信息收集判断 + ReAct 检索 + 生成 + 质量自检）
+    _CHITCHAT_REPLIES = [
+        "您好！我是您的 AI 法律助手，可以帮您解答法律问题、分析案情、检索相关判例、生成法律文书。请描述您遇到的法律问题。",
+        "您好，很高兴为您服务！无论是劳动纠纷、合同问题还是其他法律困惑，都可以直接告诉我，我会结合案例为您分析。",
+        "您好！请说说您遇到的法律问题（如被违法辞退、合同纠纷、债务问题等），我来帮您分析维权路径。",
+    ]
+
+    async def _chitchat_node(self, state: AgentState) -> dict:
+        """问候快速通道：规则模板回复，不走检索/生成/质量门控（智能路由 10.5）"""
+        text = random.choice(self._CHITCHAT_REPLIES)
+        return {
+            "response": text,
+            "messages": [AIMessage(content=text)],
+        }
+
     async def _output_node(self, state: AgentState) -> dict:
         if state.get("intent") == "search" and not state.get("response"):
             cases = state.get("retrieved_cases", [])
@@ -204,12 +226,24 @@ class LegalMindWorkflow:
             }
         return {}
 
-    #  路由函数 
+    #  路由函数
+    def _route_after_check(self, state: AgentState) -> str:
+        """check_intent 后路由：高置信 chitchat → 快速通道，其余 → 信息收集
+
+        user_supplement 非空说明 HITL #1 已介入（模型对 chitchat 判断不确定、
+        用户补充了说明）——此时保守走完整流程，不快速放行。
+        """
+        if state.get("intent") == "chitchat" and not state.get("user_supplement"):
+            return "chitchat"
+        return "continue"
+
     def _route_after_info(self, state: AgentState) -> str:
         """info_gathering 自循环路由：信息不足→回自己，充分→按意图路由"""
         if not state.get("info_sufficient"):
             return "loop"  # 自循环
         # 信息充分，按意图路由
+        # chitchat 走到这里说明经过了 HITL 澄清（用户有实质回应），
+        # 保守降级为 qa 走完整管线
         intent = state["intent"]
         if intent == "document":
             return "document"
@@ -303,7 +337,7 @@ class LegalMindWorkflow:
     def _stage(stage: str, status: str, text: str) -> dict:
         return {"stage": stage, "status": status, "text": text}
 
-    _INTENT_LABELS = {"qa": "法律咨询", "search": "案例检索", "document": "文书生成"}
+    _INTENT_LABELS = {"qa": "法律咨询", "search": "案例检索", "document": "文书生成", "chitchat": "问候闲聊"}
 
     def _stage_from_update(self, node_name: str, output: dict, intent: str | None):
         """节点完成 → 阶段事件。返回 None 表示该节点不需要推送进度。"""
