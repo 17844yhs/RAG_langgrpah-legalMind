@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 4096
     LLM_API_BASE :str = ""
+    # 背压控制（见 app/llm/model_client.py）：进程级并发 LLM 调用上限，
+    # 超出后在信号量上排队等待而非全部涌入 API（防限流雪崩）
+    LLM_MAX_CONCURRENCY: int = 16
 
     # Embedding 配置
     EMBEDDING_PROVIDER: str = "huggingface"  # openai, huggingface

@@ -16,7 +16,14 @@
 - 流式：用 astream（RunnableWithFallbacks.stream() 是同步 generator）；
   "第一个 chunk 产出前"的失败自动切换备实例，流中途失败不重试，
   走上层 SSE error 事件（避免已输出 token 重复）
+- 背压控制（UPGRADE_PLAN 10.3）：_Throttled* 子类在 _agenerate/_astream 外层
+  包进程级 asyncio.Semaphore，并发超出 LLM_MAX_CONCURRENCY 的调用在信号量上
+  排队等待而非全部涌入 API（防限流雪崩）。选择子类方案而非外层 wrapper：
+  包装类会破坏 with_structured_output/bind_tools 的方法代理（Lambda 前科），
+  真 ChatModel 子类则完全透明。主备实例共享同一信号量，容灾切换后总量上限不变
 """
+import asyncio
+
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
 from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
@@ -26,6 +33,50 @@ from app.llm.usage_tracker import TokenUsageHandler
 
 _llm = None
 _usage_handler = TokenUsageHandler()
+
+# ── 背压控制：进程级并发信号量（懒创建）──
+_llm_semaphore: "asyncio.Semaphore | None" = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """LLM 并发信号量。主备实例共享同一把，容灾切换不放大在途压力。"""
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        _llm_semaphore = asyncio.Semaphore(settings.LLM_MAX_CONCURRENCY)
+    return _llm_semaphore
+
+
+class _BackpressureMixin:
+    """在真实 API 调用的进出两端包信号量的混入。
+
+    - _agenerate：ainvoke / with_structured_output(function_calling) 的底层通道
+    - _astream  ：流式回答的底层通道，流全程持有许可
+                  （保护的就是对 API 的并发连接数；客户端断开时任务被 cancel，
+                    async with 自动释放许可，不会泄漏）
+    """
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async with _get_semaphore():
+            return await super()._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        async with _get_semaphore():
+            async for chunk in super()._astream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            ):
+                yield chunk
+
+
+class _ThrottledDeepSeek(_BackpressureMixin, ChatDeepSeek):
+    """带并发上限的 DeepSeek 客户端"""
+
+
+class _ThrottledOpenAI(_BackpressureMixin, ChatOpenAI):
+    """带并发上限的 OpenAI 兼容客户端（含 ollama 分支）"""
+
+
 # 非线程安全,单线程应用（FastAPI 单进程）可用;多线程无参函数用functools.lru_cache
 def get_llm():
     global _llm
@@ -54,15 +105,15 @@ def _init_llm():
             # V4 Flash 默认开启思考模式，但思考模式不支持 tool_choice，需手动关闭
             # callbacks= 构造参数挂载 TokenUsageHandler：实例保持 BaseChatModel，
             # with_structured_output / bind_tools 方法代理不受影响
-            return ChatDeepSeek(model=settings.LLM_MODEL, api_key=settings.LLM_API_KEY,
+            return _ThrottledDeepSeek(model=settings.LLM_MODEL, api_key=settings.LLM_API_KEY,
                               base_url=settings.LLM_API_BASE,
                               extra_body={"thinking": {"type": "disabled"}},
                               callbacks=[_usage_handler],
                               **common)
         elif provider == "openai":
-            return ChatOpenAI(model=settings.LLM_MODEL, openai_api_key=settings.LLM_API_KEY, **common)
+            return _ThrottledOpenAI(model=settings.LLM_MODEL, openai_api_key=settings.LLM_API_KEY, **common)
         elif provider == "myopenai_ollma":
-            return ChatOpenAI(model="qwen2.5:0.5b", openai_api_key=settings.LLM_API_KEY,
+            return _ThrottledOpenAI(model="qwen2.5:0.5b", openai_api_key=settings.LLM_API_KEY,
                               openai_api_base="http://127.0.0.1:11434/v1", **common)
         else:
             raise ValueError(f'不支持这个服务商:{provider}')
