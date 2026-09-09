@@ -11,6 +11,9 @@ class ChatSession(Model):
 
     class Meta:
         table = "chat_sessions"
+        # 会话列表查询：WHERE user_id = ? ORDER BY created_at DESC LIMIT 50
+        # PostgreSQL 的 FK 列不自动建索引，复合索引让该查询走 index scan 免排序
+        indexes = [("user_id", "created_at")]
 
 class ChatMessageRecord(Model):
     id = fields.IntField(pk=True, description="主键ID")

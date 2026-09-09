@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
+from tortoise import Tortoise
 
 from app.agents.workflow import workflow
 from app.dependencies import get_current_user
@@ -259,12 +260,23 @@ async def list_sessions(user=Depends(get_current_user)):
     """获取当前用户的会话列表"""
     user_obj = await _get_user_obj(user)
     sessions = await ChatSession.filter(user=user_obj).order_by("-created_at").limit(50)
+    # 批量取每个会话的首条 user 消息作为标题（DISTINCT ON 每分组取第一条），
+    # 替代循环内逐会话查询的 N+1（50 会话 = 51 条 SQL → 2 条）
+    session_ids = [s.id for s in sessions]
+    # execute_query_dict 挂在连接对象上（非 Model 类方法），返回 dict 列表
+    first_rows = await Tortoise.get_connection("default").execute_query_dict(
+        "SELECT DISTINCT ON (chat_session_id) chat_session_id, content "
+        "FROM chat_messages WHERE role = 'user' AND chat_session_id = ANY($1::int[]) "
+        "ORDER BY chat_session_id, created_at",
+        [session_ids],
+    )
+    first_map = {r["chat_session_id"]: r["content"] for r in first_rows}
     result = []
     for s in sessions:
-        last_msg = await ChatMessageRecord.filter(chat_session=s, role="user").order_by("created_at").first()
+        first_content = first_map.get(s.id)
         result.append({
             "session_id": s.session_id,
-            "title": last_msg.content[:30] if last_msg else "新对话",
+            "title": first_content[:30] if first_content else "新对话",
             "created_at": s.created_at.isoformat() if s.created_at else None,
         })
     return {"sessions": result}
@@ -281,7 +293,11 @@ async def _get_owned_session(session_id: str, user_info: dict) -> ChatSession:
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, user=Depends(get_current_user), limit: int = 50):
     session = await _get_owned_session(session_id, user)
-    messages = await ChatMessageRecord.filter(chat_session=session).order_by("created_at").limit(limit)
+    # 钳制 limit 防止 ?limit=999999 全量拉 TEXT 大字段；取"最近 N 条"需倒序 limit 后反转，
+    # 正序 + limit 会拿到最早的 50 条，长会话下新消息被截掉
+    limit = max(1, min(limit, 200))
+    messages = await ChatMessageRecord.filter(chat_session=session).order_by("-created_at").limit(limit)
+    messages.reverse()
     return {"messages": [
         {"role": m.role, "content": m.content, "meta": m.meta, "usage": m.usage}
         for m in messages
