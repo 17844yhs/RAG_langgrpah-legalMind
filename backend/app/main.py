@@ -45,12 +45,38 @@ from app.rag.vector_store import init_vector_store
 from app.llm.checkpoint import init_checkpointer,close_checkpointer
 from app.exceptions.handlers import register_exception_handlers, TraceIdMiddleware
 
+logger = logging.getLogger("app.main")
+
+
+async def _prewarm_retrieval():
+    """启动时预热检索链路（嵌入 + BM25 索引 + cross-encoder）+ 首次推理。
+
+    RetrievalAgent 是懒加载单例：不预热的话，第一个请求要额外承担
+    秒级~30s 的模型加载和 torch 首次推理初始化（内核自 tuning）。
+    把成本移到启动阶段，服务器就绪即可全速服务。
+    加载是同步 CPU 密集操作，扔线程池不阻塞事件循环；
+    失败仅记日志不阻断启动——首个请求会走原懒加载路径兜底。
+    """
+    import time
+    from app.agents.retrieval_agent import get_retrieval_agent
+
+    t0 = time.perf_counter()
+    try:
+        agent = await asyncio.to_thread(get_retrieval_agent)
+        # 一次端到端小检索：触发嵌入/BM25/rerank 的首次推理初始化
+        await agent.retrieve("预热查询", top_k=2)
+        logger.info("检索链路预热完成，耗时 %.1fs", time.perf_counter() - t0)
+    except Exception:
+        logger.exception("检索链路预热失败（首个请求将懒加载兜底）")
+
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     """应用生命周期：启动时连数据库，关闭时断开"""
     await init_db()
     await init_vector_store()
     await init_checkpointer()
+    await _prewarm_retrieval()
     yield
     await close_db()
     await close_checkpointer()

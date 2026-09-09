@@ -2,6 +2,7 @@
 import uuid
 import json
 import logging
+import asyncio
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -64,9 +65,12 @@ async def _record_messages(session: ChatSession, user_msg: str, assistant_msg: s
     meta：assistant 消息的结构化元数据（summary/risk_level/applicable_laws），
     usage：本轮 LLM token 消耗（input/output/total/calls），持久化后刷新页面不丢失。
     """
-    await ChatMessageRecord.create(chat_session=session, role="user", content=user_msg)
-    await ChatMessageRecord.create(chat_session=session, role="assistant",
-                                   content=assistant_msg, meta=meta, usage=usage)
+    # 两条 INSERT 相互独立，gather 并行省一个 DB 往返（Tortoise 每条语句独立借还连接）
+    await asyncio.gather(
+        ChatMessageRecord.create(chat_session=session, role="user", content=user_msg),
+        ChatMessageRecord.create(chat_session=session, role="assistant",
+                                 content=assistant_msg, meta=meta, usage=usage),
+    )
 
 
 async def _check_interrupt(session_id: str) -> Optional[dict]:

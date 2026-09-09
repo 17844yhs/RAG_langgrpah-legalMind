@@ -69,6 +69,9 @@ async def client(pg_available, monkeypatch):
         return None
     monkeypatch.setattr(main_mod, "init_vector_store", _noop)
     monkeypatch.setattr(main_mod, "init_checkpointer", _noop)
+    # 预热会加载 cross-encoder 并做真实推理（秒级~30s），函数级夹具逐测试触发
+    # lifespan，不跳过会让每个 API 测试都白付一次模型加载
+    monkeypatch.setattr(main_mod, "_prewarm_retrieval", _noop)
 
     # 3. 手动驱动 lifespan（ASGITransport 不自动执行 lifespan），启动 Tortoise
     async with main_mod.app.router.lifespan_context(main_mod.app):
