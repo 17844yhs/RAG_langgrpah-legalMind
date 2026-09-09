@@ -119,9 +119,26 @@ function handleKeydown(e) {
       {{ error }}
     </div>
 
-    <!-- 搜索结果 -->
-    <div v-if="loading" class="text-center py-16">
-      <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">搜索中...</div>
+    <!-- 搜索结果：骨架屏（Reranker CPU 推理需数秒，用占位卡减少"卡死感"） -->
+    <div v-if="loading" class="space-y-3">
+      <div class="text-sm mb-2" :style="{ color: 'var(--text-secondary)' }">正在混合检索 + 语义重排，约需数秒...</div>
+      <div
+        v-for="i in 3"
+        :key="i"
+        class="p-4 rounded-xl border animate-pulse"
+        :style="{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }"
+      >
+        <div class="flex items-center justify-between mb-3">
+          <div class="h-4 w-2/5 rounded" :style="{ backgroundColor: 'var(--bg-tertiary)' }"></div>
+          <div class="h-4 w-14 rounded" :style="{ backgroundColor: 'var(--bg-tertiary)' }"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-4 mb-3">
+          <div class="h-3 w-full rounded" :style="{ backgroundColor: 'var(--bg-tertiary)' }"></div>
+          <div class="h-3 w-full rounded" :style="{ backgroundColor: 'var(--bg-tertiary)' }"></div>
+          <div class="h-3 w-full rounded" :style="{ backgroundColor: 'var(--bg-tertiary)' }"></div>
+        </div>
+        <div class="h-3 w-full rounded" :style="{ backgroundColor: 'var(--bg-tertiary)' }"></div>
+      </div>
     </div>
 
     <div v-else-if="results.length === 0 && query" class="text-center py-16">
@@ -180,29 +197,29 @@ function handleKeydown(e) {
           <div v-else-if="detail" class="space-y-4">
             <div>
               <div class="text-sm font-semibold mb-1">标题</div>
-              <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.title }}</div>
+              <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.title || '-' }}</div>
             </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <div class="text-sm font-semibold mb-1">案号</div>
-                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.case_number }}</div>
+                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.case_number || '-' }}</div>
               </div>
               <div>
                 <div class="text-sm font-semibold mb-1">审理法院</div>
-                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.court }}</div>
+                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.court || '-' }}</div>
               </div>
               <div>
                 <div class="text-sm font-semibold mb-1">裁判日期</div>
-                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.judgment_date }}</div>
+                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.judgment_date || '-' }}</div>
               </div>
               <div>
                 <div class="text-sm font-semibold mb-1">案件类型</div>
-                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.case_type }}</div>
+                <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">{{ detail.case_type || '-' }}</div>
               </div>
             </div>
             <div>
               <div class="text-sm font-semibold mb-1">裁判要旨</div>
-              <div class="text-sm leading-relaxed" :style="{ color: 'var(--text-secondary)' }">{{ detail.summary }}</div>
+              <div class="text-sm leading-relaxed" :style="{ color: 'var(--text-secondary)' }">{{ detail.summary || '暂无摘要' }}</div>
             </div>
             <div v-if="detail.content">
               <div class="text-sm font-semibold mb-1">裁判文书全文</div>

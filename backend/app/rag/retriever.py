@@ -234,11 +234,13 @@ class HybridRetriever:
         """文档转字典"""
         return {
             "id": doc.metadata.get("id"),
+            "type": doc.metadata.get("type"),
             "title": doc.metadata.get("title"),
             "content": doc.page_content,
             "case_number": doc.metadata.get("case_number"),
             "court": doc.metadata.get("court"),
             "judgment_date": doc.metadata.get("judgment_date"),
+            "case_type": doc.metadata.get("case_type"),
             "summary": doc.metadata.get("summary"),
             "laws": doc.metadata.get("laws"),
             "score": doc.metadata.get("score", 0),

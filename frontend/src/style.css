@@ -13,6 +13,8 @@
   --text-secondary: #4a5568;
   --text-muted: #a0aec0;
   --border: #e2e8f0;
+  --header-bg: rgba(255, 255, 255, 0.88);
+  --nav-active: #9a7b2f;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
   --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1);
@@ -32,10 +34,45 @@
     --text-secondary: #a0aec0;
     --text-muted: #718096;
     --border: #2d3748;
+    --header-bg: rgba(15, 20, 30, 0.85);
+    --nav-active: #e8d48b;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
     --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.4);
   }
+}
+
+/* ── 顶部导航栏（主题感知，替代组件内硬编码白色） ── */
+.app-header {
+  background: var(--header-bg);
+}
+
+.nav-link {
+  color: var(--text-secondary);
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  background: var(--bg-tertiary);
+}
+
+/* 当前路由高亮：金色文字 + 淡金底，呼应品牌强调色 */
+.nav-link.router-link-active {
+  color: var(--nav-active);
+  background: rgba(212, 175, 55, 0.12);
+  font-weight: 500;
+}
+
+.nav-ghost-btn {
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.nav-ghost-btn:hover {
+  color: var(--text);
+  background: var(--bg-tertiary);
 }
 
 body {

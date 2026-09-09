@@ -31,13 +31,15 @@ class RetrievalAgent:
         self.retriever = HybridRetriever()
         self.reranker = Reranker() if settings.RERANK_ENABLED else None
 
-    async def retrieve(self, query: str, top_k: int = 5, filters: Dict = None) -> List[Dict]:
+    async def retrieve(self, query: str, top_k: int = 5, filters: Dict = None, doc_type: str = None) -> List[Dict]:
         """
         检索相关案例
         Args:
             query: 查询文本
             top_k: 返回数量
             filters: 过滤条件
+            doc_type: 文档类型过滤（"case"/"law"），在重排前过滤不浪费 Reranker 算力；
+                      None 表示不过滤（聊天 RAG 需要法条+案例混合召回）
 
         Returns:
             检索到的案例列表
@@ -48,6 +50,9 @@ class RetrievalAgent:
             top_k=top_k * 3,
             filters=filters
         )
+        # 按文档类型过滤（重排前剔除，避免法条 chunk 挤占案例名额）
+        if doc_type and candidates:
+            candidates = [c for c in candidates if c.get("type") == doc_type]
         # 重排序
         if self.reranker and candidates:
             ranked_results = await self.reranker.rerank(

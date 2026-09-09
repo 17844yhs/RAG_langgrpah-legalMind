@@ -17,14 +17,18 @@ router = APIRouter()
 
 
 class CaseDetail(BaseModel):
-    """案例详情"""
+    """案例详情
+
+    字段全部 Optional：DB 中 judgment_date/case_type 等列均可为 NULL，
+    严格类型会让 Pydantic 校验失败 → SYS_001 500（前端表现为"加载失败"）。
+    """
     id: str  # 案例唯一标识
     title: str  # 案例标题
-    case_number: str  # 案号
-    court: str  # 审理法院
-    judgment_date: str  # 裁判日期
-    case_type: str  # 案件类型（民事/劳动争议等）
-    summary: str  # 裁判要旨/案情摘要
+    case_number: Optional[str] = None  # 案号
+    court: Optional[str] = None  # 审理法院
+    judgment_date: Optional[str] = None  # 裁判日期
+    case_type: Optional[str] = None  # 案件类型（民事/劳动争议等）
+    summary: Optional[str] = None  # 裁判要旨/案情摘要
     content: Optional[str] = None  # 裁判文书全文（仅详情接口返回）
     laws: List[str] = []  # 引用的法条列表
 
@@ -47,7 +51,8 @@ async def search_cases_get(
         results = await agent.retrieve(
             query=q,
             top_k=limit,
-            filters=filters if filters else None
+            filters=filters if filters else None,
+            doc_type="case",  # 案例页只要案例文档；法条混入会导致点击详情 404
         )
     except Exception:
         # 检索链路（Chroma/BM25/Reranker）任一环节失败，
@@ -71,4 +76,6 @@ async def get_case_detail(case_id: str):
 
     if not case:
         raise CaseError(ErrorCode.CASE_NOT_FOUND)
+    # laws 列可为 NULL：显式传 None 给带默认值的字段仍会触发校验错误，统一归一为 []
+    case["laws"] = case.get("laws") or []
     return CaseDetail(**case)

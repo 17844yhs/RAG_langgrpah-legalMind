@@ -25,12 +25,20 @@ const riskStyle = computed(() => {
 
 <template>
   <div class="flex gap-3 px-4 py-5" :class="{ 'flex-row-reverse': isUser }">
-    <!-- 头像 -->
+    <!-- 头像：用户=蓝色圆标；AI=品牌渐变 + 金环天平（呼应法律主题与导航栏"法"字标） -->
     <div
       class="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-sm font-medium text-white"
-      :style="{ backgroundColor: isUser ? 'var(--primary)' : '#10b981' }"
+      :style="isUser
+        ? { backgroundColor: 'var(--primary)' }
+        : {
+            background: 'linear-gradient(135deg, var(--primary-light) 0%, var(--primary-dark) 100%)',
+            boxShadow: 'inset 0 0 0 1px rgba(232, 212, 139, 0.45), 0 1px 4px rgba(0, 0, 0, 0.28)',
+          }"
     >
-      {{ isUser ? '我' : 'AI' }}
+      <span v-if="isUser">我</span>
+      <svg v-else viewBox="0 0 24 24" fill="currentColor" class="w-[18px] h-[18px]" style="color: var(--accent-light); filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))" aria-hidden="true">
+        <path fill-rule="evenodd" d="M12 2.25a.75.75 0 0 1 .75.75v.756a49.106 49.106 0 0 1 9.152 1 .75.75 0 0 1-.152 1.485h-1.918l2.474 10.124a.75.75 0 0 1-.375.84A6.723 6.723 0 0 1 18.75 18a6.723 6.723 0 0 1-3.181-.795.75.75 0 0 1-.375-.84L17.668 6.25h-1.918a.75.75 0 0 1-.152-1.485 49.105 49.105 0 0 1 5.447-.93A49.099 49.099 0 0 0 12.75 5.26v10.727a12.001 12.001 0 0 0 3.5.928.75.75 0 0 1 0 1.485 13.5 13.5 0 0 1-8.5 0 .75.75 0 0 1 0-1.485 12.001 12.001 0 0 0 3.5-.928V5.26c-1.761.132-3.503.45-5.213.947a49.105 49.105 0 0 1 5.447.93.75.75 0 0 1-.152 1.486h-1.916l2.474 10.124a.75.75 0 0 1-.375.84A6.723 6.723 0 0 1 5.25 18a6.723 6.723 0 0 1-3.181-.795.75.75 0 0 1-.375-.84L4.168 6.249H2.25a.75.75 0 0 1-.152-1.485 49.074 49.074 0 0 1 9.152-.999V3a.75.75 0 0 1 .75-.75Z" clip-rule="evenodd" />
+      </svg>
     </div>
 
     <!-- 内容区 -->

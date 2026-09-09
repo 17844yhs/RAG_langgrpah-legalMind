@@ -37,28 +37,39 @@ function parseSSEStream(response, controller) {
     const decoder = new TextDecoder()
     let buffer = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
 
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || !trimmed.startsWith('data: ')) continue
-        const payload = trimmed.slice(6)
-        if (payload === '[DONE]') {
-          yield { done: true }
-          return
-        }
-        try {
-          yield JSON.parse(payload)
-        } catch {
-          // 忽略无法解析的数据
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed || !trimmed.startsWith('data: ')) continue
+          const payload = trimmed.slice(6)
+          if (payload === '[DONE]') {
+            yield { done: true }
+            return
+          }
+          try {
+            yield JSON.parse(payload)
+          } catch {
+            // 忽略无法解析的数据
+          }
         }
       }
+    } finally {
+      // 消费端提前退出（收到 interrupt 提前 return / 收到 error 事件 break）时，
+      // 把剩余响应体读完让 fetch 自然完成——后端发完 interrupt/error 后紧跟
+      // [DONE] 并关闭流，剩余只有几十字节。
+      // 不能用 controller.abort()：abort 本身会被 Chrome 记为 net::ERR_ABORTED；
+      // 也不能不读直接退出：悬挂连接要等 GC 回收时才报同样的错。
+      try {
+        while (!(await reader.read()).done) { /* 丢弃剩余字节 */ }
+      } catch { /* 连接已断开等异常场景，忽略 */ }
     }
   }
 

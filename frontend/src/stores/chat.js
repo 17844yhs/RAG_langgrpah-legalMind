@@ -58,6 +58,7 @@ export const useChatStore = defineStore('chat', () => {
    * @returns {Promise<boolean>} - 是否被 interrupt 打断
    */
   async function _consumeStream(stream, aiIdx) {
+    let interrupted = false
     for await (const chunk of stream) {
       if (chunk.done) break
 
@@ -75,8 +76,9 @@ export const useChatStore = defineStore('chat', () => {
       if (chunk.meta) {
         messages.value[aiIdx].meta = chunk.meta
       }
-      // token 消耗（本请求所有 LLM 调用归集，interrupt 打断的对话也会发）
-      if (chunk.usage) {
+      // token 消耗（本请求所有 LLM 调用归集）
+      // interrupt 路径后端也会发 usage，但打断轮次不在气泡上显示 token 行
+      if (chunk.usage && !interrupted) {
         messages.value[aiIdx].usage = chunk.usage
       }
       // 分阶段进度事件（意图识别/检索/生成），累积成步骤时间线：
@@ -99,16 +101,21 @@ export const useChatStore = defineStore('chat', () => {
         break
       }
       // ── Human-in-the-Loop：检测到 interrupt ──
+      // 记录后不提前退出：后端 interrupt 后还紧跟 usage/[DONE] 并关闭流，
+      // 继续消费到自然结束，fetch 才能正常完成（提前退出会留下
+      // 悬挂/中止的连接，Chrome 控制台必现 net::ERR_ABORTED）
       if (chunk.interrupt) {
+        interrupted = true
         pendingInterrupt.value = chunk.interrupt
         messages.value[aiIdx].stages = []  // 进度时间线交给 interrupt 问答 UI 接管
-        return true  // 被打断，停止消费
       }
     }
-    // 流正常结束：进度时间线完成使命，清掉避免历史残留
+    // 流结束：进度时间线完成使命，清掉避免历史残留
     messages.value[aiIdx].stages = []
-    pendingInterrupt.value = null
-    return false
+    if (!interrupted) {
+      pendingInterrupt.value = null
+    }
+    return interrupted
   }
 
   async function sendMessage(text) {
