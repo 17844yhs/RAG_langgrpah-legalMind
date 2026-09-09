@@ -16,6 +16,12 @@ from typing import List, Dict, Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# 限制本地模型（bge/reranker torch）线程数，避免并发检索时线程超订导致 CPU 空转
+# 必须在任何 app/torch 导入前设置
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
+os.environ.setdefault("MKL_NUM_THREADS", "4")
+
 # ── Judge 评分 Prompt ──
 
 JUDGE_PROMPT = """你是一个法律问答质量评估专家。请对以下 RAG 系统的回答进行四维度评分。
@@ -244,8 +250,8 @@ async def run_evaluation(run_name: str, limit: int = 0):
     return report
 
 
-async def run_ragas_evaluation(run_name: str, limit: int = 0):
-    """使用 RAGAS 框架评估 RAG 管线"""
+async def _collect_ragas_data(run_name: str, limit: int = 0):
+    """RAGAS 阶段一（异步）：检索 + 生成答案，收集评估数据"""
     from tortoise import Tortoise
     from app.models.eval_dataset import EvalSample
     from app.llm.model_client import get_llm
@@ -270,29 +276,30 @@ async def run_ragas_evaluation(run_name: str, limit: int = 0):
         samples = samples[:limit]
     print(f"  加载了 {len(samples)} 条评估样本")
 
-    # ── 第一阶段：收集数据（检索 + 生成答案）──
+    # ── 第一阶段：收集数据（检索 + 生成答案，并发加速）──
     questions = []
     answers = []
     ground_truths = []
     contexts_list = []
     detail_results = []
+    gen_sem = asyncio.Semaphore(5)  # 并发上限：检索走本地模型，LLM 内部还有信号量兜底
 
-    for i, sample in enumerate(samples):
-        print(f"\n[{i+1}/{len(samples)}] {sample.question[:40]}...")
-
-        # 检索
-        contexts = await retrieve_contexts(sample.question, top_k=5)
+    async def _prepare(idx: int, sample):
+        async with gen_sem:
+            contexts = await retrieve_contexts(sample.question, top_k=5)
+            answer = await generate_answer(sample.question, contexts)
         context_texts = [
             f"{c.get('title', '')}\n{c.get('content', c.get('summary', ''))}"
             for c in contexts
         ]
         context_titles = [c.get("title", "未知") for c in contexts]
-        print(f"   检索到 {len(contexts)} 条上下文")
+        print(f"[{idx+1}/{len(samples)}] {sample.question[:40]}... 完成（{len(contexts)} 条上下文，答案 {len(answer)} 字）")
+        return sample, contexts, answer, context_texts, context_titles
 
-        # 生成答案
-        answer = await generate_answer(sample.question, contexts)
-        print(f"   生成答案：{answer[:60]}...")
+    tasks = [_prepare(i, s) for i, s in enumerate(samples)]
+    prepared = await asyncio.gather(*tasks)
 
+    for sample, contexts, answer, context_texts, context_titles in prepared:
         questions.append(sample.question)
         answers.append(answer)
         ground_truths.append([sample.ground_truth])  # RAGAS 要求 list of list
@@ -306,9 +313,28 @@ async def run_ragas_evaluation(run_name: str, limit: int = 0):
             "retrieved_contexts": context_titles,
         })
 
-    # ── 第二阶段：RAGAS 批量评估 ──
-    print(f"\n{'='*50}")
-    print("  正在运行 RAGAS 评估...")
+    await Tortoise.close_connections()
+    return {
+        "sample_count": len(samples),
+        "questions": questions,
+        "answers": answers,
+        "ground_truths": ground_truths,
+        "contexts_list": contexts_list,
+        "detail_results": detail_results,
+    }
+
+
+def run_ragas_evaluation(run_name: str, limit: int = 0):
+    """使用 RAGAS 框架评估 RAG 管线
+
+    两阶段架构（修复 executor 死锁）：
+      阶段一 asyncio.run() 异步收集数据；阶段二在主线程【同步】跑 ragas_evaluate，
+      让 ragas 独占事件循环。旧版把 ragas 丢进 executor 线程，其内部
+      nest_asyncio 与外层事件循环互锁，进程会永久挂起（CPU 烧完后闲置）。
+    """
+    from app.llm.model_client import get_llm
+
+    data = asyncio.run(_collect_ragas_data(run_name, limit))
 
     # RAGAS 0.4.x 兼容补丁 — ChatVertexAI 在新版 langchain_community 中已移除
     import importlib
@@ -336,65 +362,111 @@ async def run_ragas_evaluation(run_name: str, limit: int = 0):
         )
 
     dataset = Dataset.from_dict({
-        "question": questions,
-        "answer": answers,
-        "reference": [gt[0] for gt in ground_truths],  # RAGAS 0.4.x 列名
-        "contexts": contexts_list,
+        "question": data["questions"],
+        "answer": data["answers"],
+        "reference": [gt[0] for gt in data["ground_truths"]],  # RAGAS 0.4.x 列名
+        "contexts": data["contexts_list"],
     })
+    detail_results = data["detail_results"]
+    sample_count = data["sample_count"]
+
+    print(f"\n{'='*50}")
+    print("  正在运行 RAGAS 评估...")
 
     # 使用项目的 LLM 作为 RAGAS 评估模型
-    llm = get_llm()
+    # 不能直接用 get_llm()：① RunnableWithFallbacks 禁止 setattr temperature
+    #    → ragas 每样本抛 ValueError → NaN；② DeepSeek 不支持 n>1 参数
+    #    → faithfulness/context_precision 请求 n=3 时 400 BadRequestError → NaN
+    # 解决：直接构造 _RagasCompatibleDeepSeek 实例（解包 fallback + n>1 兼容）
+    from app.llm.model_client import _ThrottledDeepSeek
+    from app.config import settings
+    from langchain_core.outputs import ChatResult
+    from ragas.llms import LangchainLLMWrapper
 
-    # 在独立线程中运行 RAGAS，避免 asyncio 嵌套冲突
-    import concurrent.futures
+    class _RagasCompatibleDeepSeek(_ThrottledDeepSeek):
+        """RAGAS 兼容版：DeepSeek 不支持 n>1，此子类拆 n>1 为 n 次 n=1 调用后合并"""
 
-    def _run_ragas_sync():
-        # 包装 LLM
-        try:
-            from ragas.llms import LangchainLLMWrapper
-            ragas_llm = LangchainLLMWrapper(llm)
-        except Exception:
-            ragas_llm = llm
-        # 包装 Embeddings（用项目的 bge-small-zh，避免依赖 OpenAI）
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            n = self.n  # RAGAS 直接设 model 属性而非 kwargs
+            if n <= 1:
+                return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+            self.n = 1  # 临时降为 1，避免 API 400
+            try:
+                gens = []
+                for _ in range(n):
+                    r = await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+                    gens.extend(r.generations)
+                return ChatResult(generations=gens, llm_output={})
+            finally:
+                self.n = n  # 恢复原值
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            n = self.n
+            if n <= 1:
+                return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+            self.n = 1
+            try:
+                gens = []
+                for _ in range(n):
+                    r = super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+                    gens.extend(r.generations)
+                return ChatResult(generations=gens, llm_output={})
+            finally:
+                self.n = n
+
+    raw_llm = _RagasCompatibleDeepSeek(
+        model=settings.LLM_MODEL,
+        api_key=settings.LLM_API_KEY,
+        base_url=settings.LLM_API_BASE,
+        extra_body={"thinking": {"type": "disabled"}},
+        temperature=settings.LLM_TEMPERATURE,
+        max_tokens=settings.LLM_MAX_TOKENS,
+    )
+    ragas_llm = LangchainLLMWrapper(raw_llm)
+    # 包装 Embeddings（用项目的 bge-small-zh，避免依赖 OpenAI）
+    try:
+        from app.rag.embeddings import get_embeddings
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        ragas_emb = LangchainEmbeddingsWrapper(get_embeddings())
+    except Exception:
         ragas_emb = None
-        try:
-            from app.rag.embeddings import get_embeddings
-            from ragas.embeddings import LangchainEmbeddingsWrapper
-            ragas_emb = LangchainEmbeddingsWrapper(get_embeddings())
-        except Exception:
-            pass
-        kwargs = dict(
-            dataset=dataset,
-            metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
-            llm=ragas_llm,
-        )
-        if ragas_emb:
-            kwargs["embeddings"] = ragas_emb
-        return ragas_evaluate(**kwargs)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, _run_ragas_sync)
+    # RunConfig：解析失败/超时自动重试，进一步压低 NaN 率
+    from ragas.run_config import RunConfig
+    kwargs = dict(
+        dataset=dataset,
+        metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+        llm=ragas_llm,
+        run_config=RunConfig(timeout=300, max_retries=3, max_workers=2),
+    )
+    if ragas_emb:
+        kwargs["embeddings"] = ragas_emb
+    result = ragas_evaluate(**kwargs)
 
     # ── 输出结果 ──
     df = result.to_pandas() if hasattr(result, 'to_pandas') else None
 
     if df is not None:
         avg = df.mean(numeric_only=True)
+        # NaN 透明化：每列统计打分失败的行数（LLM 解析失败/超时且重试后仍失败）
+        metric_cols = [c for c in ("faithfulness", "answer_relevancy", "context_precision", "context_recall") if c in df.columns]
+        nan_counts = {c: int(df[c].isna().sum()) for c in metric_cols}
         print(f"\n{'='*50}")
         print(f"RAGAS 评估完成：{run_name}")
-        print(f"样本数：{len(samples)}")
+        print(f"样本数：{sample_count}")
         for col in avg.index:
-            print(f"  {col}: {avg[col]:.4f}")
+            nan_note = f"（NaN {nan_counts[col]} 行）" if col in nan_counts and nan_counts[col] else ""
+            print(f"  {col}: {avg[col]:.4f} {nan_note}")
 
         # 保存详细结果
         report_dir = os.path.join(os.path.dirname(__file__), "..", "data")
         report_path = os.path.join(report_dir, "ragas_results.json")
         report_data = {
             "run_name": run_name,
-            "total_samples": len(samples),
+            "total_samples": sample_count,
             "created_at": datetime.now().isoformat(),
             "averages": {col: round(float(avg[col]), 4) for col in avg.index},
+            "nan_counts": nan_counts,
+            "valid_samples": {col: int(df[col].notna().sum()) for col in metric_cols},
             "per_sample": df.to_dict(orient="records"),
             "details": detail_results,
         }
@@ -404,8 +476,6 @@ async def run_ragas_evaluation(run_name: str, limit: int = 0):
     else:
         # 回退：手动打印 result
         print(f"\nRAGAS 结果：{result}")
-
-    await Tortoise.close_connections()
 
 
 if __name__ == "__main__":
@@ -419,7 +489,7 @@ if __name__ == "__main__":
         print("🔍 开始 RAGAS 评估...")
         print(f"   运行名称：{args.run_name}")
         print(f"   样本限制：{args.limit or '全部'}")
-        asyncio.run(run_ragas_evaluation(args.run_name, args.limit))
+        run_ragas_evaluation(args.run_name, args.limit)
     else:
         print("🔍 开始 RAG 评估...")
         print(f"   运行名称：{args.run_name}")
