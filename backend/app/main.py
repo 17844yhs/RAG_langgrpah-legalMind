@@ -43,6 +43,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.database import init_db,close_db
 from app.rag.vector_store import init_vector_store
 from app.llm.checkpoint import init_checkpointer,close_checkpointer
+from app.cache.redis_cache import ping_cache, close_cache
 from app.exceptions.handlers import register_exception_handlers, TraceIdMiddleware
 
 logger = logging.getLogger("app.main")
@@ -76,10 +77,16 @@ async def lifespan(app:FastAPI):
     await init_db()
     await init_vector_store()
     await init_checkpointer()
+    # 缓存探测仅做观测日志：不可达时缓存层自动熔断降级，业务零感知
+    if await ping_cache():
+        logger.info("Redis 缓存已连接（意图/检索缓存生效）")
+    else:
+        logger.warning("Redis 不可达或缓存未启用，缓存自动降级直连")
     await _prewarm_retrieval()
     yield
     await close_db()
     await close_checkpointer()
+    await close_cache()
 
 app = FastAPI(
     title="LegalMind API",

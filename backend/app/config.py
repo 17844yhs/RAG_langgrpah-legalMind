@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     REFLECTION_MAX_ROUNDS: int = 1     # 重试轮数上限（1 = 最多重新生成一次，防止无限循环）
     REFLECTION_SCORE_THRESHOLD: float = 0.6  # 质量分数线（低于则视为不通过）
 
+    # Redis 缓存（见 app/cache/redis_cache.py）：意图识别缓存 + 检索结果缓存
+    # 缓存是加速器不是依赖：False 或 Redis 不可达时自动降级直连，业务零感知
+    CACHE_ENABLED: bool = True
+    INTENT_CACHE_TTL: int = 86400      # 意图缓存 24h（同问题的意图分类基本确定）
+    RETRIEVAL_CACHE_TTL: int = 600     # 检索缓存 10min（知识库静态，短窗内同查询复用重排结果）
+
     # LangSmith 配置
     LANGSMITH_TRACING: bool = True
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"

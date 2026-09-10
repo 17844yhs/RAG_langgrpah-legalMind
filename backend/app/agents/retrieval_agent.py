@@ -4,6 +4,7 @@
 - build_retrieval_subgraph：ReAct 子图（agent + ToolNode + evaluate + finish），嵌入主图
 """
 import json
+import logging
 from typing import TypedDict, Annotated, List, Dict
 
 from langgraph.graph import StateGraph, START, END
@@ -17,6 +18,9 @@ from app.rag.reranker import Reranker
 from app.config import settings
 from app.llm.model_client import get_llm
 from app.tools.search_tool import search_cases
+from app.cache.redis_cache import cache_get, cache_set, make_key
+
+logger = logging.getLogger("app.agent")
 
 
 # 底层检索 Agent（被 search_cases Tool 内部调用）
@@ -44,6 +48,13 @@ class RetrievalAgent:
         Returns:
             检索到的案例列表
         """
+        # cache-aside：完整链路（召回+过滤+重排）的结果整体缓存，键含全部输入——
+        # CPU 重排 2-9s 是检索侧最贵的一步，知识库静态所以同查询短窗内可安全复用
+        cache_key = make_key("retrieval", query, top_k, filters or {}, doc_type or "")
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            logger.info("检索缓存命中: %s（%d 条）", query[:20], len(cached))
+            return cached
         # 初始检索（多路召回）
         candidates = await self.retriever.retrieve(
             query=query,
@@ -60,8 +71,11 @@ class RetrievalAgent:
                             documents=candidates,
                             top_k=top_k
                         )
+            await cache_set(cache_key, ranked_results, settings.RETRIEVAL_CACHE_TTL)
             return ranked_results
-        return candidates[:top_k]
+        results = candidates[:top_k]
+        await cache_set(cache_key, results, settings.RETRIEVAL_CACHE_TTL)
+        return results
 
     async def search_by_keywords(
         self,
