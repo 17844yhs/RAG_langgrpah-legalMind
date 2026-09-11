@@ -9,6 +9,7 @@
 
 ### 新增
 
+- **🧊 Embedding L1 进程内缓存**：`app/rag/embeddings.py` 新增 `_QueryCacheMixin` + `CachedHuggingFaceEmbeddings`——OrderedDict LRU（512 条 ≈ 8MB，线程锁保护），仅缓存 `embed_query` 热路径（Chroma 查询唯一挂点），索引构建 `embed_documents` 不缓存；键归一化与 Redis 键一致（小写+空白折叠）。多级缓存体系 L1 层补齐（L2 = Redis 意图/检索缓存）；语义缓存有意不做（法律场景正确性优先）。7 个单元测试（伪 embedder + MRO 组合，覆盖 LRU 淘汰/命中刷新序），全套 79 用例
 - **⚡ Redis 缓存层（意图识别 + 检索结果）**：新增 `app/cache/redis_cache.py`——cache-aside 旁路缓存，`CACHE_ENABLED` 总开关 + 连续 2 次失败熔断 60s + 降级直连三段式可用性设计，缓存是加速器不是依赖；意图识别缓存（归一化 sha256 键，24h TTL，同问题免 1 次 LLM 调用，失败降级默认值绝不入缓存防错误分类固化）；检索结果缓存（召回+过滤+重排全链路整体缓存，键含 query/top_k/filters/doc_type，10min TTL，CPU 重排 2-9s 同查询短窗复用）；lifespan 启动探测打观测日志、关闭释放连接池；compose 中 Redis 服务从"配置存在但零使用"变为真实生效。15 个单元测试覆盖归一化/往返/降级/熔断恢复/业务接入（LLM 与检索器调用计数验证），全套 72 用例
 - **⚙️ CI/CD 流水线（GitHub Actions）**：`.github/workflows/ci.yml` 声明式合同——push/PR 触发 CI（起 PostgreSQL service 容器，46 个 pytest 用例全量真跑，含 API 集成测试）；`v*` tag 触发 CD 交付半环（测试通过后构建 backend 镜像推送 GHCR，部署终点站为 compose `--profile prod`）。README 挂 CI badge
 - **🚦 k6 性能压测（双模式）**：`loadtest/chat_stream.js`——`infra` 基础设施基线（458 req/s、p95 2.24ms、100 VU 8.2 万请求零错误）+ `chat` 真实 SSE 流式链路（206 条流 0 失败，首事件 p90 57.6ms，整流 p90 13.8s，单条均耗 1,758 tokens）。实测瓶颈在 DeepSeek 上游生成而非应用栈，为路线图"多级缓存 + 限流排队"提供实证。完整报告见 `loadtest/README.md`。踩坑：k6 v2 移除内置 SSE 模块，最终用 `http.post` 完整消费流（`timings.waiting`=首字节，事后解析 SSE 响应体），零扩展依赖
