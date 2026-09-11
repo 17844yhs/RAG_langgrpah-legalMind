@@ -121,7 +121,9 @@ uv run python scripts/evaluate.py --ragas
 uv run python scripts/evaluate.py --judge
 ```
 
-评估数据集：`data/legal_eval_dataset_v2.json`（100 条标注样本，覆盖劳动争议、合同纠纷、婚姻家庭、知识产权、刑事等）
+评估数据集：`data/legal_eval_dataset_v3.json`（149 条标注样本：100 条同源问答 + 35 条场景化法条问答 + 14 条案例事实型，覆盖劳动争议、合同纠纷、婚姻家庭、交通、借贷、刑事、消费、保险、公司、继承、医疗等 20+ 领域）
+
+检索质量实测（`scripts/smoke_api.py eval`）：**Hit@5 = 90%，MRR@5 = 0.875**（20 条场景问答子集）；知识库规模：法条 4,310 条（21 部法律 + 18 部司法解释，24 领域，按"条"粒度入库）+ 典型案例 44 篇全文，Chroma 共 3,344 chunks
 
 ## 运行测试
 

@@ -47,9 +47,10 @@ class Settings(BaseSettings):
     # RAG配置
     RAG_TOP_K: int = 5
     # rerank 分数阈值：低于此分视为不相关、不进入上下文（0=禁用过滤）。
-    # 实测依据（scripts/diag_retrieval.py）：强相关 0.55-0.99 / 噪声填充 ≤0.15，
-    # 0.7 会误杀 0.699 的真相关案例，0.5 保留次相关、滤净噪声
-    RAG_SCORE_THRESHOLD: float = 0.5
+    # 实测三档分布（scripts/diag_retrieval.py + diag_teshu.py）：
+    #   案例/字面强相关 0.5+ / 法条语义相关 0.05-0.5（口语查询→抽象条文分数天然低）
+    #   / 噪声填充 ≤0.04。0.05 滤净噪声、保留语义相关的正确条文
+    RAG_SCORE_THRESHOLD: float = 0.05
     RERANK_ENABLED: bool = True
 
     # Context 管理（对话历史视图裁剪 + 自动摘要压缩，见 app/llm/context_manager.py）

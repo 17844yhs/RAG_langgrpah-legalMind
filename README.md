@@ -214,7 +214,7 @@ legal_mind/
 │   │   ├── clean_data.py        # 数据清洗
 │   │   └── import_eval_data.py  # 评估数据导入
 │   ├── data/                    # 数据集
-│   │   └── legal_eval_dataset_v2.json  # 100 条标注评估集
+│   │   └── legal_eval_dataset_v3.json  # 149 条评估集（100 条同源 + 35 条场景问答 + 14 条案例事实型）
 │   ├── test/                    # 测试脚本
 │   └── pyproject.toml
 ├── frontend/

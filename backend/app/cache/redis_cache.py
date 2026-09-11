@@ -108,6 +108,35 @@ async def cache_set(key: str, value: Any, ttl: int) -> None:
         logger.debug("缓存写入失败（忽略）: %s", e)
 
 
+async def cache_clear_all() -> int:
+    """清除本项目全部缓存（legalmind:* 前缀，SCAN 渐进式避免阻塞）。
+
+    使用场景：向量索引/BM25 重建后必须失效检索缓存——否则 TTL 内
+    查询会命中按旧索引生成的旧结果（包括重建前的空结果）。
+    """
+    if not settings.CACHE_ENABLED or _breaker_open():
+        return 0
+    try:
+        client = _get_client()
+        deleted = 0
+        cursor = 0
+        while True:
+            cursor, keys = await client.scan(
+                cursor=cursor, match="legalmind:*", count=200
+            )
+            if keys:
+                deleted += await client.delete(*keys)
+            if cursor == 0:
+                break
+        _record_success()
+        logger.info("缓存已清空: 删除 %d 个键", deleted)
+        return deleted
+    except Exception as e:
+        _record_failure()
+        logger.debug("缓存清空失败（忽略）: %s", e)
+        return 0
+
+
 async def ping_cache() -> bool:
     """启动时探测 Redis 可用性（仅用于日志观测，不影响可用性）"""
     if not settings.CACHE_ENABLED:

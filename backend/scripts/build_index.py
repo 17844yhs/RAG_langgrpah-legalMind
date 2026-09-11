@@ -114,6 +114,11 @@ async def build_index():
     vector_store.add_documents(all_chunks)
 
     print(f"\n✅ 已导入 {len(all_chunks)} 个 chunk 到向量库")
+
+    # 索引重建后检索缓存全部失效：否则 TTL 内查询命中按旧索引生成的旧结果
+    from app.cache.redis_cache import cache_clear_all
+    await cache_clear_all()
+
     await Tortoise.close_connections()
 
 
