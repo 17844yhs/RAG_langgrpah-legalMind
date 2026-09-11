@@ -9,6 +9,7 @@
 
 ### 新增
 
+- **🚨 企业级审计修复（高严重度三项）**：① Dockerfile 移除 `--workers 2` 改单进程——信号量/令牌桶/熔断器均为进程级单例，多 worker 会静默翻倍所有限额并复制模型内存；瓶颈在 LLM 上游单进程远未饱和，扩容走容器副本数（设计契约已写入注释）。② Ruff 质量门禁进 CI：`[tool.ruff.lint]`（E4/E7/E9/F+B）+ pytest 前置 lint 步骤；`Depends()` 误报（B008）用 extend-immutable-calls 豁免、两处有意导入顺序（E402）用 per-file-ignores 留痕；随 lint 修复 7 处真问题（重复导入、`raise...from None`×3、`zip(strict=True)`×3）。③ documents API 鉴权语义澄清（无状态生成，user 仅闸门）+ 整体重写（IDE 回退致物理损坏）。全仓审计达标面与剩余待做见 优化项目.md 十八章 / UPGRADE_PLAN 十六章
 - **🚦 LLM 速率限流（Token Bucket）**：新增 `app/llm/rate_limit.py`——异步令牌桶（容量=1 秒补充量，允许突发；惰性补充 + 锁外排队，排队优先于报错），`LLM_RATE_LIMIT_RPM` 配置（默认 300，0=禁用）；`model_client._BackpressureMixin` 接线，主备实例共享同一只桶，流式整段只扣 1 个令牌。关键设计：**令牌桶先于信号量**（准入控制→并发控制），桶等待不占用并发许可——顺序放错会被背压测试的峰值断言当场抓住。与既有信号量（背压/并发数）、缓存层熔断（快速失败）构成三层防护。9 个单元测试（确定性时间注入验证 refill 数学），全套 88 用例
 - **🧊 Embedding L1 进程内缓存**：`app/rag/embeddings.py` 新增 `_QueryCacheMixin` + `CachedHuggingFaceEmbeddings`——OrderedDict LRU（512 条 ≈ 8MB，线程锁保护），仅缓存 `embed_query` 热路径（Chroma 查询唯一挂点），索引构建 `embed_documents` 不缓存；键归一化与 Redis 键一致（小写+空白折叠）。多级缓存体系 L1 层补齐（L2 = Redis 意图/检索缓存）；语义缓存有意不做（法律场景正确性优先）。7 个单元测试（伪 embedder + MRO 组合，覆盖 LRU 淘汰/命中刷新序），全套 79 用例
 - **⚡ Redis 缓存层（意图识别 + 检索结果）**：新增 `app/cache/redis_cache.py`——cache-aside 旁路缓存，`CACHE_ENABLED` 总开关 + 连续 2 次失败熔断 60s + 降级直连三段式可用性设计，缓存是加速器不是依赖；意图识别缓存（归一化 sha256 键，24h TTL，同问题免 1 次 LLM 调用，失败降级默认值绝不入缓存防错误分类固化）；检索结果缓存（召回+过滤+重排全链路整体缓存，键含 query/top_k/filters/doc_type，10min TTL，CPU 重排 2-9s 同查询短窗复用）；lifespan 启动探测打观测日志、关闭释放连接池；compose 中 Redis 服务从"配置存在但零使用"变为真实生效。15 个单元测试覆盖归一化/往返/降级/熔断恢复/业务接入（LLM 与检索器调用计数验证），全套 72 用例

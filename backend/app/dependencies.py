@@ -20,7 +20,7 @@ async def get_current_user(credentials:HTTPAuthorizationCredentials=Depends(secu
         if user_id is None:
             raise AuthError(ErrorCode.AUTH_INVALID_TOKEN)
     except JWTError:
-        raise AuthError(ErrorCode.AUTH_INVALID_TOKEN)
+        raise AuthError(ErrorCode.AUTH_INVALID_TOKEN) from None
     # 根据user_id查询数据库用户，无结果返回None（TortoiseORM方法）
     user = await User.get_or_none(id=user_id)
     if not user:

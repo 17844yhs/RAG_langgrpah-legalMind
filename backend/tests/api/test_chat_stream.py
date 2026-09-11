@@ -3,7 +3,6 @@
 覆盖：session_id 首发事件、stage 透传、token 累积、sources/usage 收尾、[DONE]；
 灰盒一小块：流结束后翻数据库验证消息与 token usage JSONB 落库。
 """
-import uuid
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessageChunk

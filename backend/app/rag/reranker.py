@@ -75,9 +75,9 @@ class Reranker:
         # CrossEncoder 打分 — 同步 CPU 密集调用扔线程池，不阻塞事件循环
         scores = await asyncio.to_thread(self._model.predict, pairs)
 
-        # 按分数降序排列
+        # 按分数降序排列（strict：scores 必须与 documents 一一对齐，错位即数据契约破坏）
         scored = sorted(
-            zip(documents, scores),
+            zip(documents, scores, strict=True),
             key=lambda x: float(x[1]),
             reverse=True,
         )

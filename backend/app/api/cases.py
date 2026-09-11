@@ -58,7 +58,7 @@ async def search_cases_get(
         # 检索链路（Chroma/BM25/Reranker）任一环节失败，
         # 都不把原始异常抛给用户，统一翻译成 RAG_001 + 500
         logger.exception("案例检索失败: q=%s", q)
-        raise RAGError(ErrorCode.RAG_RETRIEVAL_FAILED)
+        raise RAGError(ErrorCode.RAG_RETRIEVAL_FAILED) from None
 
     return {"cases": results, "total": len(results)}
 
@@ -72,7 +72,7 @@ async def get_case_detail(case_id: str):
         # id 为 UUID 主键，格式非法（如 "abc"）会让 ORM 抛 OperationalError，
         # 对用户而言等价于"案例不存在"，翻译成 404 而非 500
         logger.warning("案例 id 格式非法: %s", case_id)
-        raise CaseError(ErrorCode.CASE_NOT_FOUND)
+        raise CaseError(ErrorCode.CASE_NOT_FOUND) from None
 
     if not case:
         raise CaseError(ErrorCode.CASE_NOT_FOUND)

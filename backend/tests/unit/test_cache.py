@@ -167,7 +167,6 @@ def _make_intent_agent(llm):
 
 async def test_intent_cache_skips_llm_on_repeat_query():
     """同问题第二次识别命中缓存，LLM 只调一次"""
-    from app.agents.intent_agent import IntentAgent
     llm = _CountingLLM()
     agent = _make_intent_agent(llm)
 

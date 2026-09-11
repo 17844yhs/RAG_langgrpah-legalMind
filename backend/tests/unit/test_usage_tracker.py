@@ -5,7 +5,6 @@
 所以双来源提取、累加、清栈这类边界必须有测试守住。
 构造 LLMResult 时不发任何网络请求——只是组装 langchain 的输出对象喂给回调。
 """
-from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult

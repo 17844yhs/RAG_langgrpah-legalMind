@@ -147,7 +147,7 @@ async def agent_node(state: RetrievalState) -> dict:
     system = SystemMessage(content=(
         "你是案例检索助手。根据用户问题提取法院(court)、年份(year)、案由(category)等结构化参数，"
         "调用 search_cases 工具检索案例。\n"
-        f"可用的案由类别：劳动争议、合同纠纷、婚姻家庭、知识产权、刑事、行政、交通事故、消费权益\n"
+        "可用的案由类别：劳动争议、合同纠纷、婚姻家庭、知识产权、刑事、行政、交通事故、消费权益\n"
         "如果首次检索结果不足，请调整查询关键词或放宽过滤条件重新检索。"
     ))
 

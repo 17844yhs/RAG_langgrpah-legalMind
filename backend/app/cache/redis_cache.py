@@ -16,7 +16,6 @@
 - 熔断器（circuit breaker）：快速失败优于慢速重试，用"冷却期"给故障组件
   恢复时间，是 Resilience4j / polly 的标准做法
 """
-import asyncio
 import hashlib
 import json
 import logging

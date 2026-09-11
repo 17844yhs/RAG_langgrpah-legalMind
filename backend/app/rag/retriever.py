@@ -38,7 +38,7 @@ def _rrf_fusion(
     scores: Dict[str, float] = {}
     doc_map: Dict[str, Document] = {}
 
-    for docs, weight in zip(doc_lists, weights):
+    for docs, weight in zip(doc_lists, weights, strict=True):  # 双路结果必须与权重一一对应
         for rank, doc in enumerate(docs, start=1):
             doc_id = doc.metadata.get("id", str(id(doc)))
             scores[doc_id] = scores.get(doc_id, 0) + weight / (k + rank)
@@ -93,7 +93,7 @@ class HybridRetriever:
         if existing and existing.get("documents"):
             docs = [
                 Document(page_content=doc, metadata=meta or {})
-                for doc, meta in zip(existing.get("documents"), existing.get("metadatas"))
+                for doc, meta in zip(existing.get("documents"), existing.get("metadatas"), strict=True)
             ]
             self.bm25_retriever = BM25Retriever.from_documents(
                 docs, k=settings.RAG_TOP_K * 2

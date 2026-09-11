@@ -1,5 +1,8 @@
 """
 文书生成 API 路由
+
+无状态设计：生成结果不落库、不持久化。user 依赖仅作鉴权闸门；
+若未来增加文书持久化，必须以 user.id 建立归属（防越权读取他人文书）。
 """
 import json
 import logging
@@ -18,6 +21,7 @@ logger = logging.getLogger("app.error")
 
 router = APIRouter()
 
+
 class DocumentGenerateRequest(BaseModel):
     """文书生成请求"""
     document_type: str
@@ -25,11 +29,13 @@ class DocumentGenerateRequest(BaseModel):
     params: Dict
     use_references: bool = True
 
+
 class DocumentGenerateResponse(BaseModel):
     """文书生成响应"""
     content: str
     document_type: str
     references: List[Dict]
+
 
 @router.post("/generate", response_model=DocumentGenerateResponse)
 async def generate_document(request: DocumentGenerateRequest, user=Depends(get_current_user)):
@@ -43,7 +49,7 @@ async def generate_document(request: DocumentGenerateRequest, user=Depends(get_c
             query=request.query,
             top_k=3
         )
-    
+
     result = await agent.generate(
         document_type=request.document_type,
         params=request.params,
@@ -57,9 +63,17 @@ async def generate_document(request: DocumentGenerateRequest, user=Depends(get_c
         references=result["references"]
     )
 
+
 @router.post("/generate/stream")
-async def generate_document_stream(request: DocumentGenerateRequest, user=Depends(get_current_user), http_request: Request = None):
-    """生成法律文书（流式）"""
+async def generate_document_stream(
+    request: DocumentGenerateRequest,
+    user=Depends(get_current_user),
+    http_request: Request = None,  # type: ignore[assignment]  # FastAPI 注入，声明式兜底 None 防御测试直呼
+):
+    """生成法律文书（流式）。
+
+    TraceIdMiddleware 先于路由执行，http_request.state.trace_id 必然存在。
+    """
     trace_id = http_request.state.trace_id if http_request else None
 
     async def generate():

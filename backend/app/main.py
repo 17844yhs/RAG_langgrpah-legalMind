@@ -35,7 +35,6 @@ if sys.platform == "win32":
     except ImportError:
         pass
 
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

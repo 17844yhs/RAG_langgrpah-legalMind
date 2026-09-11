@@ -83,7 +83,7 @@ class DocumentAgent:
         prompt_parts=[
             f"请生成一份{document_type}。",
             f"\n用户需求：{query}",
-            f"\n文书参数：",
+            "\n文书参数：",
         ]
         for k,v in params.items():
             prompt_parts.append(f"- {k}:{v}")

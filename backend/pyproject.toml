@@ -33,8 +33,30 @@ asyncio_mode = "auto"
 # 把 rootdir（backend/）加入 sys.path，保证 `import app.*` 在任意平台/CI 生效
 pythonpath = ["."]
 
+[tool.ruff]
+target-version = "py314"
+include = ["app/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+# CI 第一道闸门（ci.yml 在 pytest 之前执行）：pycodestyle 关键子集 + pyflakes + bugbear
+# 有意不选 I（import 排序）与 E501（行宽）——历史代码量大，收益低噪音高；
+# 随手修而非配置豁免是原则
+select = ["E4", "E7", "E9", "F", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Depends() 写在参数默认值是 FastAPI 官方依赖注入模式，非真 bug（B008 误报）
+extend-immutable-calls = ["fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+# E402：两处导入顺序是有意设计——
+#   main.py: Windows 事件循环策略补丁必须先于框架导入执行；
+#   usage_tracker.py: 环境变量注入必须先于 LangChain 导入
+"app/main.py" = ["E402"]
+"app/llm/usage_tracker.py" = ["E402"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "ruff>=0.14",
 ]

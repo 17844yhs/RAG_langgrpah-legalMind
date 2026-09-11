@@ -1,17 +1,16 @@
 """法律问答 Agent — 基于检索到的案例回答法律问题"""
 
-from langchain_core.messages.base import BaseMessage
 import logging
 from typing import List, Dict, Optional, Literal
 from pydantic import BaseModel, Field
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
 from app.config import settings
 from app.llm.model_client import get_llm
-from app.llm.prompts import QA_SYSTEM_PROMPT, QA_USER_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT, REFLECTION_PROMPT
+from app.llm.prompts import QA_SYSTEM_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT, REFLECTION_PROMPT
 
 logger = logging.getLogger("app.agent")
 
