@@ -166,7 +166,7 @@ function copyContent() {
           >
             <div>
               <div class="text-4xl mb-3">📄</div>
-              <p class="text-sm" :style="{ color: 'var(--text-secondary)' }">在左侧填写信息后，点击"生成文书"</p>
+              <p class="text-sm" :style="{ color: 'var(--text-secondary)' }">在表单中填写信息后，点击"生成文书"</p>
             </div>
           </div>
 

@@ -1,0 +1,19 @@
+﻿uv : 
+At line:15 char:2163
++ ... de\ripgrep\bin'; uv run python scripts/diag_threshold.py 2>&1 | Out-F ...
++                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Loading weights:   0%|          | 0/71 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 71/71 [00:00<00:00, 24132.54it/s]
+
+Loading weights:   0%|          | 0/393 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 393/393 [00:00<00:00, 7176.74it/s]
+Redis 连续失败 2 次，熔断 60s（期间缓存直连）
+[拖欠工资] 2条 top分数=['0.848', '0.114'] ['王某劳动仲裁案', '基本案情']
+[公司拖欠工资应该怎么办] 2条 top分数=['0.821', '0.057'] ['王某劳动仲裁案', '基本案情']
+[离婚财产分割] 4条 top分数=['0.933', '0.486', '0.311'] ['张三与李四离婚财产纠纷案', '徐某某诉张某某婚姻家庭案']
+[民间借贷] 0条 top分数=[] []
+[拖欠工资/law] 5条 top分数=['0.806', '0.635', '0.614']
+[劳动仲裁/law] 5条 top分数=['0.943', '0.940', '0.916']

@@ -56,13 +56,19 @@ class RetrievalAgent:
         if cached is not None:
             logger.info("检索缓存命中: %s（%d 条）", query[:20], len(cached))
             return cached
-        # 初始检索（多路召回）
+        # 初始检索（多路召回）。
+        # doc_type 在召回层就下推（而非召回后过滤）：短查询（如"拖欠工资"）的混合
+        # top-k 可能被单一类型占满（法条 chunk 字面/语义双强），案例被挤出候选池，
+        # 召回后过滤得到空集——实测 '拖欠工资' 案例召回 0 条，分层下推后恢复
+        recall_filters = dict(filters or {})
+        if doc_type:
+            recall_filters.setdefault("type", doc_type)
         candidates = await self.retriever.retrieve(
             query=query,
             top_k=top_k * 3,
-            filters=filters
+            filters=recall_filters
         )
-        # 按文档类型过滤（重排前剔除，避免法条 chunk 挤占案例名额）
+        # 后置过滤仅作兜底（召回层 filters 因存储不支持而下推失败时仍保证类型正确）
         if doc_type and candidates:
             candidates = [c for c in candidates if c.get("type") == doc_type]
         # 重排序
@@ -133,7 +139,8 @@ class RetrievalState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]  # ReAct 对话链
 
 
-MAX_INTERRUPT_ROUNDS = 3  # 最多 interrupt 3 次，防止无限循环
+MAX_INTERRUPT_ROUNDS = 1  # 最多人工补充 1 次：检索不充分的危害是"引用少"而非幻觉
+# （qa 提示词有无参考兜底），反复打断比少引用更伤体验——宁可放行已有结果
 
 
 def _extract_cases_from_messages(messages: list) -> list:
@@ -205,14 +212,13 @@ def evaluate_node(state: RetrievalState) -> dict:
         return {"retrieved_cases": cases, "status": "done"}
 
     # 自动重试耗尽 → 人工介入（HITL interrupt）
+    # 文案面向用户：不暴露内部轮数/条数等实现细节，只说清"没找到足够案例"并给补充方向
     user_supplement = interrupt({
         "type": "need_more_info",
         "hint": (
-            f"已尝试 {retry} 轮检索，只找到 {count} 条相关案例，信息可能不够充分。\n"
-            f"您可以补充以下信息帮助我更精准地检索：\n"
-            f"- 具体的案由或案件类型（如劳动争议、合同纠纷）\n"
-            f"- 涉及的法律法规名称\n"
-            f"- 关键的案件事实描述"
+            "暂时没有找到足够多的相关案例。您可以补充一些案件细节帮助我更精准地检索"
+            "（如：纠纷的具体经过、涉及的法律名称、想达到的目标）；"
+            "也可以直接点击确认，我将基于现有信息为您解答。"
         ),
         "current_count": count,
         "interrupt_round": interrupt_count + 1,

@@ -131,27 +131,27 @@ const auth = useAuthStore()
             class="text-3xl md:text-4xl font-bold font-serif mb-1"
             :style="{ color: 'var(--accent)' }"
           >
-            10,000+
+            4,310+
           </div>
-          <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">累计法律服务</div>
+          <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">在线法条 · 24 个领域</div>
         </div>
         <div class="py-8 px-6 text-center">
           <div
             class="text-3xl md:text-4xl font-bold font-serif mb-1"
             :style="{ color: 'var(--accent)' }"
           >
-            500+
+            3,300+
           </div>
-          <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">法律文书模板</div>
+          <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">知识库切片 · 案例全文</div>
         </div>
         <div class="py-8 px-6 text-center">
           <div
             class="text-3xl md:text-4xl font-bold font-serif mb-1"
             :style="{ color: 'var(--accent)' }"
           >
-            50,000+
+            90%
           </div>
-          <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">案例库收录</div>
+          <div class="text-sm" :style="{ color: 'var(--text-secondary)' }">检索 Hit@5（实测）</div>
         </div>
       </div>
     </section>

@@ -22,15 +22,20 @@ const icon = computed(() => {
 
 const placeholder = computed(() => {
   if (interruptType.value === 'confirm_intent') return '请补充说明您的需求...'
-  if (interruptType.value === 'clarify_info' || interruptType.value === 'need_more_info') return '请回答上方问题...'
+  if (interruptType.value === 'need_more_info')
+    return '可补充案件细节（选填，也可直接点击右侧按钮跳过）...'
+  if (interruptType.value === 'clarify_info') return '请回答上方问题...'
   return '请输入...'
 })
 
+/** 检索不充分场景允许空输入（"跳过"= 让 AI 基于已有结果继续回答） */
+const canSkip = computed(() => interruptType.value === 'need_more_info')
+
 function submit() {
   const text = input.value.trim()
-  if (!text || chat.isStreaming) return
+  if ((!text && !canSkip.value) || chat.isStreaming) return
   input.value = ''
-  chat.resumeInterrupt(text)
+  chat.resumeInterrupt(text || '（用户没有更多补充，请基于已有检索结果直接回答）')
 }
 
 function onKeydown(e) {
@@ -134,11 +139,11 @@ const quickOptions = computed(() => {
         ></textarea>
         <button
           @click="submit"
-          :disabled="!input.trim() || chat.isStreaming"
+          :disabled="(!input.trim() && !canSkip) || chat.isStreaming"
           class="px-4 py-2 rounded-xl text-sm font-medium text-white transition-opacity disabled:opacity-40 cursor-pointer whitespace-nowrap"
           :style="{ backgroundColor: 'var(--primary)' }"
         >
-          确认
+          {{ canSkip && !input.trim() ? '跳过，直接回答' : '确认' }}
         </button>
       </div>
     </div>

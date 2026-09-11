@@ -1,0 +1,21 @@
+﻿uv : 
+At line:15 char:2163
++ ... scode\ripgrep\bin'; uv run python scripts/diag_recall.py 2>&1 | Out-F ...
++                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Loading weights:   0%|          | 0/71 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 71/71 [00:00<00:00, 19309.79it/s]
+
+Loading weights:   0%|          | 0/393 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 393/393 [00:00<00:00, 7293.86it/s]
+原始候选（case 过滤后）: 7
+rerank 后: 5
+  [0.8484] 王某劳动仲裁案 (type=case)
+  [0.1140] 基本案情 (type=case)
+  [0.0193] 马某行政处罚诉讼案 (type=case)
+  [0.0142] 株洲工商银行某支行诉株洲某金属材料公司等金融借款合同案 (type=case)
+  [0.0004] 张某与某房地产开发公司房屋买卖合同纠纷案 (type=case)
+不过滤 type 的候选分布: {'law': 15}
+阈值: 0.05
