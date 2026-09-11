@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # 超出后在信号量上排队等待而非全部涌入 API（防限流雪崩）
     LLM_MAX_CONCURRENCY: int = 16
 
+    # 速率限流（见 app/llm/rate_limit.py）：LLM 请求发起速率上限（次/分钟），
+    # Token Bucket 实现，桶容量 = 1 秒的量；0 = 禁用。主备实例共享同一只桶
+    LLM_RATE_LIMIT_RPM: int = 300
+
     # Embedding 配置
     EMBEDDING_PROVIDER: str = "huggingface"  # openai, huggingface
     EMBEDDING_MODEL: str = "BAAI/bge-small-zh"

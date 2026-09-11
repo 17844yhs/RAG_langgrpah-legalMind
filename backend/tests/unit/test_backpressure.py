@@ -13,11 +13,20 @@ import pytest
 
 from app.config import settings
 from app.llm import model_client as mc
+from app.llm import rate_limit as rl
 from app.llm.model_client import (
     _BackpressureMixin,
     _get_semaphore,
     get_llm,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limit(monkeypatch):
+    """本模块只测信号量（并发数），须与令牌桶（发起速率）隔离——
+    否则 300RPM 的桶会把调用节流到 5/s，峰值并发断言失真"""
+    monkeypatch.setattr(settings, "LLM_RATE_LIMIT_RPM", 0)
+    monkeypatch.setattr(rl, "_bucket", None)
 
 
 # ── 测试替身：只观测并发度，不发网络请求 ──

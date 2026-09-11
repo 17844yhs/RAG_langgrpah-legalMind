@@ -29,6 +29,7 @@ from langchain_deepseek import ChatDeepSeek
 from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
 
 from app.config import settings
+from app.llm.rate_limit import acquire_rate_token
 from app.llm.usage_tracker import TokenUsageHandler
 
 _llm = None
@@ -53,15 +54,19 @@ class _BackpressureMixin:
     - _astream  ：流式回答的底层通道，流全程持有许可
                   （保护的就是对 API 的并发连接数；客户端断开时任务被 cancel，
                     async with 自动释放许可，不会泄漏）
+    顺序：先令牌桶（准入速率）后信号量（并发数）——桶等待发生在信号量之外，
+    等待者不占用并发许可，否则限流会人为压低并发峰值（有测试为证）。
     """
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        await acquire_rate_token()       # 令牌桶：准入控制，先于并发闸门
         async with _get_semaphore():
             return await super()._agenerate(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             )
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        await acquire_rate_token()       # 整段流只扣一次（启动时刻）
         async with _get_semaphore():
             async for chunk in super()._astream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
