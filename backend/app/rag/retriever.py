@@ -127,6 +127,7 @@ class HybridRetriever:
           - $contains: {"laws": {"$contains": "合同法"}}  (字符串子串 / 列表元素匹配)
           - $in:      {"category": {"$in": ["劳动争议","合同纠纷"]}}
           - $neq:     {"court": {"$neq": "某法院"}}
+          - $year:    {"judgment_date": {"$year": 2023}}  (日期字符串前缀匹配)
         """
         if not filters:
             return True
@@ -151,6 +152,10 @@ class HybridRetriever:
                             return False
                     elif op == "$neq":
                         if value == expected:
+                            return False
+                    elif op == "$year":
+                        # judgment_date 形如 "2023-05-12"，None/缺字段一律视为不匹配
+                        if value is None or not str(value).startswith(str(expected)):
                             return False
                     else:
                         return False
@@ -210,25 +215,6 @@ class HybridRetriever:
             docs = [doc for doc in docs if self._matches_filter(doc.metadata, filters)]
 
         return [self._doc_to_dict(doc) for doc in docs[:top_k]]
-
-
-    # def _merge_results(self, vector_docs, bm25_docs, top_k):
-    #     """合并检索结果 — 向量结果优先，BM25 补充遗漏"""
-    #     seen_ids = set()
-    #     results = []
-    #     for doc in vector_docs:
-    #         if hasattr(doc, "metadata"):
-    #             doc_id = doc.metadata.get("id")
-    #             if doc_id and doc_id not in seen_ids:
-    #                 results.append(self._doc_to_dict(doc))
-    #                 seen_ids.add(doc_id)
-    #     for doc in bm25_docs:
-    #         if hasattr(doc, 'metadata'):
-    #             doc_id = doc.metadata.get('id')
-    #             if doc_id and doc_id not in seen_ids:
-    #                 results.append(self._doc_to_dict(doc))
-    #                 seen_ids.add(doc_id)
-    #     return results[:top_k]
 
     def _doc_to_dict(self, doc) -> Dict:
         """文档转字典"""

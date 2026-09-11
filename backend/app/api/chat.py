@@ -43,10 +43,7 @@ class ChatResponse(BaseModel):
     sources: List[dict]
     session_id: str
 
-# 辅助函数 
-async def _get_user_obj(user_info: dict) -> User:
-    return await User.get(id=user_info["user_id"])
-
+# 辅助函数
 async def _ensure_session(session_id: str, user_obj: User) -> ChatSession:
     """确保会话存在并属于当前用户（不存在则创建）"""
     session, _ = await ChatSession.get_or_create(
@@ -118,14 +115,18 @@ async def _finalize_stream(session, query, full_text, session_id):
 
 #  路由 
 @router.post("/send", response_model=ChatResponse)
-async def send_message(request: ChatRequest, user=Depends(get_current_user)):
+async def send_message(request: ChatRequest, user: User = Depends(get_current_user)):
     """发送消息（非流式）"""
-    user_obj = await _get_user_obj(user)
     session_id = request.session_id or str(uuid.uuid4())
-    session = await _ensure_session(session_id, user_obj)
+    session = await _ensure_session(session_id, user)
     result = await workflow.run(query=request.message, thread_id=session_id)
 
-    await _record_messages(session, request.message, result["response"])
+    # 与流式路径一致：token 消耗随消息持久化（流式在 _finalize_stream，非流式在此）
+    req_usage = usage_var.get()
+    await _record_messages(
+        session, request.message, result["response"],
+        usage=req_usage.to_dict() if req_usage else None,
+    )
 
     return ChatResponse(
         response=result["response"],
@@ -137,11 +138,10 @@ async def send_message(request: ChatRequest, user=Depends(get_current_user)):
 # equest:ChatRequest 是 FastAPI 把 HTTP 请求体按 ChatRequest 模型解析后注入的对象；
 # http_request:Request 是注入原始的 HTTP 请求对象。一个拿业务数据，一个拿元数据
 @router.post("/stream")
-async def stream_message(request: ChatRequest, user=Depends(get_current_user), http_request: Request = None):
+async def stream_message(request: ChatRequest, user: User = Depends(get_current_user), http_request: Request = None):
     """发送消息（流式响应 + interrupt 检测）"""
-    user_obj = await _get_user_obj(user)
     session_id = request.session_id or str(uuid.uuid4())
-    session = await _ensure_session(session_id, user_obj)
+    session = await _ensure_session(session_id, user)
     query = request.message
     trace_id = http_request.state.trace_id if http_request else None
 
@@ -197,15 +197,14 @@ async def stream_message(request: ChatRequest, user=Depends(get_current_user), h
 
 
 @router.post("/resume")
-async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_user), http_request: Request = None):
+async def resume_interrupted(request: ResumeRequest, user: User = Depends(get_current_user), http_request: Request = None):
     """恢复被 interrupt 打断的图执行（流式响应）。
 
     用户回答了 interrupt 问题后调用此端点。
     resume 后可能触发下一个 interrupt（如先意图确认，再检索补充），
     所以同样需要检测 interrupt 并返回 SSE 流。
     """
-    user_obj = await _get_user_obj(user)
-    session = await _ensure_session(request.session_id, user_obj)
+    session = await _ensure_session(request.session_id, user)
     trace_id = http_request.state.trace_id if http_request else None
 
     async def generate():
@@ -260,10 +259,9 @@ async def resume_interrupted(request: ResumeRequest, user=Depends(get_current_us
 
 #  会话管理
 @router.get("/sessions")
-async def list_sessions(user=Depends(get_current_user)):
+async def list_sessions(user: User = Depends(get_current_user)):
     """获取当前用户的会话列表"""
-    user_obj = await _get_user_obj(user)
-    sessions = await ChatSession.filter(user=user_obj).order_by("-created_at").limit(50)
+    sessions = await ChatSession.filter(user=user).order_by("-created_at").limit(50)
     # 批量取每个会话的首条 user 消息作为标题（DISTINCT ON 每分组取第一条），
     # 替代循环内逐会话查询的 N+1（50 会话 = 51 条 SQL → 2 条）
     session_ids = [s.id for s in sessions]
@@ -286,16 +284,16 @@ async def list_sessions(user=Depends(get_current_user)):
     return {"sessions": result}
 
 
-async def _get_owned_session(session_id: str, user_info: dict) -> ChatSession:
+async def _get_owned_session(session_id: str, user: User) -> ChatSession:
     """获取属于当前用户的会话，不存在或越权则 404"""
     session = await ChatSession.get_or_none(session_id=session_id)
-    if not session or str(session.user_id) != user_info["user_id"]:
+    if not session or session.user_id != user.id:
         raise ChatError(ErrorCode.CHAT_SESSION_NOT_FOUND)
     return session
 
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, user=Depends(get_current_user), limit: int = 50):
+async def get_session_messages(session_id: str, user: User = Depends(get_current_user), limit: int = 50):
     session = await _get_owned_session(session_id, user)
     # 钳制 limit 防止 ?limit=999999 全量拉 TEXT 大字段；取"最近 N 条"需倒序 limit 后反转，
     # 正序 + limit 会拿到最早的 50 条，长会话下新消息被截掉
@@ -309,7 +307,7 @@ async def get_session_messages(session_id: str, user=Depends(get_current_user), 
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str, user=Depends(get_current_user)):
+async def delete_session(session_id: str, user: User = Depends(get_current_user)):
     session = await _get_owned_session(session_id, user)
     await session.delete()
     return {"message": "Session deleted"}

@@ -9,13 +9,18 @@ from app.models.user import User
 # 实例化Bearer认证类,auto_error=False表示如果没有提供认证信息，不会自动抛出异常，而是返回None
 security = HTTPBearer(auto_error=False)
 
-async def get_current_user(credentials:HTTPAuthorizationCredentials=Depends(security)):
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
+    """JWT 鉴权依赖：校验 token 并直接返回 User ORM 对象。
+
+    返回完整对象而非 {user_id, username} 字典：路由层（chat 等）无需再拿
+    id 二次查库，每请求省一次 PK 查询。
+    """
     if credentials is None:
         raise AuthError(ErrorCode.AUTH_NOT_LOGGED_IN)
     # 提取Bearer后面的真实token字符串
     token = credentials.credentials
     try:
-        payload = jwt.decode(token,settings.SECRET_KEY,algorithms=["HS256"])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
         user_id = payload.get("sub")
         if user_id is None:
             raise AuthError(ErrorCode.AUTH_INVALID_TOKEN)
@@ -26,4 +31,4 @@ async def get_current_user(credentials:HTTPAuthorizationCredentials=Depends(secu
     if not user:
         raise AuthError(ErrorCode.AUTH_USER_NOT_FOUND)
 
-    return {"user_id":str(user.id),"username":user.username}
+    return user

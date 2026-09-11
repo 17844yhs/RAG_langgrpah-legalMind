@@ -72,12 +72,14 @@ async def search_cases(
 ) -> str:
     """检索相关裁判文书案例。支持按法院、年份、案由进行结构化过滤。
     当首次检索结果不足时，可调整查询参数重新检索。"""
-    # 构建 metadata filter
+    # 构建 metadata filter（year → judgment_date 前缀匹配，走检索器后置过滤）
     filters = {}
     if court:
         filters["court"] = court
     if category:
         filters["case_type"] = category
+    if year:
+        filters["judgment_date"] = {"$year": year}
 
     try:
         # 第 0 层已通过（Pydantic 自动校验）

@@ -45,9 +45,11 @@ async def generate_document(request: DocumentGenerateRequest, user=Depends(get_c
 
     references = []
     if request.use_references:
+        # doc_type="case"：文书参考语义是"参考判例"，法条混入会稀释参考质量
         references = await retrieval_agent.retrieve(
             query=request.query,
-            top_k=3
+            top_k=3,
+            doc_type="case",
         )
 
     result = await agent.generate(
@@ -83,9 +85,11 @@ async def generate_document_stream(
 
             references = []
             if request.use_references:
+                # 同非流式：参考语义是判例，过滤掉法条文档
                 references = await retrieval_agent.retrieve(
                     query=request.query,
-                    top_k=3
+                    top_k=3,
+                    doc_type="case",
                 )
 
             # 流式生成文书（prompt 构造封装在 DocumentAgent.astream_generate 内）
