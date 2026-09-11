@@ -1,8 +1,11 @@
+import logging
 import os
 import threading
 from collections import OrderedDict
 from langchain_huggingface import HuggingFaceEmbeddings
 from app.config import settings
+
+logger = logging.getLogger("app.rag")
 
 _LOCAL_MODEL_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models"

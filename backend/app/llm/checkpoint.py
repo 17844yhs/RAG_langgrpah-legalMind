@@ -1,10 +1,9 @@
-'''
-"langgraph-checkpoint-postgres>=3.1" "psycopg[binary,pool]>=3.3"
+"""LangGraph 对话记忆持久化（checkpointer）
 
-LangGraph 对话记忆持久化（checkpointer）
+依赖：langgraph-checkpoint-postgres>=3.1 + psycopg[binary,pool]>=3.3
 使用 AsyncPostgresSaver 将对话状态按 thread_id 持久化到 PostgreSQL，
-实现跨轮次、跨进程重启的对话记忆。
-'''
+实现跨轮次、跨进程重启的对话记忆（HITL 中断恢复的基础）。
+"""
 
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -22,7 +21,7 @@ async def init_checkpointer() -> AsyncPostgresSaver:
 
     _pool = AsyncConnectionPool(
         conninfo=settings.DATABASE_URL,
-        max_size=20,
+        max_size=settings.DB_POOL_MAX_SIZE,
         open=False,
         kwargs={
             "autocommit": True,  # 确保连接不在事务中，以允许 CREATE INDEX CONCURRENTLY
@@ -42,7 +41,7 @@ def get_checkpointer() -> AsyncPostgresSaver:
     必须在 init_checkpointer() 之后调用（即在 lifespan 启动完成后），
     否则图编译阶段拿不到 checkpointer。
     """
-    if _checkpointer is  None:
+    if _checkpointer is None:
         raise RuntimeError(
             "Checkpointer 尚未初始化，请在应用启动时调用 init_checkpointer()"
         )

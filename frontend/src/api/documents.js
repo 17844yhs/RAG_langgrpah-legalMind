@@ -12,7 +12,7 @@ export function streamGenerateDocument(documentType, query, params, useReference
   const controller = new AbortController()
 
   async function* generate() {
-    const response = await fetch('/api/documents/generate/stream', {
+    const response = await fetch('/api/v1/documents/generate/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

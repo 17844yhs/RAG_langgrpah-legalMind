@@ -35,7 +35,7 @@ from langchain_core.outputs import LLMResult
 
 logger = logging.getLogger("app.usage")
 
-# traceId 桥接：ASGI中间件 set → flaskapi里面的langchain 回调 get
+# traceId 桥接：ASGI中间件 set → FastAPI 请求链里的 langchain 回调 get
 trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
 
 

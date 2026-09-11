@@ -1,20 +1,12 @@
-"""Prompt 模板定义"""
+"""Prompt 模板定义 — 全项目 Prompt 文案单一维护点
 
-# 意图识别 Prompt
-INTENT_RECOGNITION_PROMPT = """你是一个法律咨询意图识别专家。请分析用户的问题，判断其意图属于以下哪一类：
+约定：所有发给 LLM 的 prompt 文案集中在本文件，Agent 只负责参数组装。
+"""
 
-1. qa - 法律问答：用户提出法律问题，需要专业解答
-   示例："离婚财产怎么分割？"、"交通事故怎么赔偿？"
-
-2. document - 文书生成：用户需要生成法律文书
-   示例："帮我写一份起诉状"、"生成一份租房合同"
-
-3. search - 案例检索：用户需要查找相关案例
-   示例："查找类似案例"、"有哪些相关的判例？"
-
-用户问题：{query}
-
-请只返回意图类型（qa/document/search），不要返回其他内容。"""
+# 意图识别 Prompt（IntentAgent：结构化输出 IntentResult，本模板只提供任务指令）
+INTENT_RECOGNIZE_PROMPT = """分析用户问题并判断意图。
+注意：问候、寒暄、感谢、无实质法律内容的闲聊应归类为 chitchat。
+用户问题：{query}"""
 
 
 # 法律问答系统 Prompt
@@ -38,17 +30,30 @@ QA_SYSTEM_PROMPT = """你是一位专业的法律顾问，具有丰富的法律�
 请始终保持专业、严谨的态度。"""
 
 
-# 法律问答用户 Prompt
-QA_USER_PROMPT = """## 用户问题
-{query}
+# ── 文书生成 Prompt（DocumentAgent）──
+DOCUMENT_SYSTEM_PROMPT = """你是一位专业的法律文书撰写专家，请根据用户需求和法律规范生成专业的法律文书。"""
 
-## 相关案例
-{cases}
+# 用户 Prompt 骨架：{params_block}/{references_block}/{template_block} 由 DocumentAgent 按参数组装
+DOCUMENT_USER_PROMPT = """请生成一份{document_type}。
 
-## 对话历史
-{history}
+用户需求：{query}
 
-请基于以上信息，回答用户的法律问题。"""
+文书参数：{params_block}{references_block}{template_block}"""
+
+# 有模板骨架：让 LLM 严格照此结构填空，保证格式齐整
+DOCUMENT_TEMPLATE_INSTRUCTION = """请严格按照以下格式模板生成，将上述参数与需求填入对应位置，保持结构完整：
+{template}"""
+
+# 无模板：退回兜底句，避免未配模板的类型报错
+DOCUMENT_FALLBACK_INSTRUCTION = """请严格按照{document_type}的标准格式和法律规范生成文书。"""
+
+
+# 检索 ReAct 子图系统 Prompt（RetrievalAgent.agent_node）
+RETRIEVAL_AGENT_SYSTEM_PROMPT = """你是案例检索助手。根据用户问题提取法院(court)、年份(year)、案由(category)等结构化参数，调用 search_cases 工具检索案例。
+
+可用的案由类别：劳动争议、合同纠纷、婚姻家庭、知识产权、刑事、行政、交通事故、消费权益
+
+如果首次检索结果不足，请调整查询关键词或放宽过滤条件重新检索。"""
 
 
 # 信息收集充分性判断 + 追问生成 Prompt

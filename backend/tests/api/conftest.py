@@ -102,9 +102,9 @@ async def auth_headers(client: httpx.AsyncClient):
         "email": f"{uuid.uuid4().hex[:8]}@test.com",
         "password": "Passw0rd!",
     }
-    resp = await client.post("/api/auth/register", json=creds)
+    resp = await client.post("/api/v1/auth/register", json=creds)
     assert resp.status_code == 200, resp.text
-    login = await client.post("/api/auth/login",
+    login = await client.post("/api/v1/auth/login",
                               json={"username": creds["username"],
                                     "password": creds["password"]})
     assert login.status_code == 200, login.text

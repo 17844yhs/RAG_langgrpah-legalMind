@@ -147,7 +147,7 @@ class LegalMindWorkflow:
         # 最终版由 quality_gate 节点在放行时统一写入对话历史
         return {
             "response": full_text,
-            "sources": self.qa_agent._extract_sources(cases),
+            "sources": self.qa_agent.extract_sources(cases),
             "answer_meta": meta.model_dump() if meta else {},
             # 持久化到 checkpoint：下轮继续增量摘要，不用重复压缩
             "context_summary": summary,
@@ -222,7 +222,7 @@ class LegalMindWorkflow:
             return {
                 "messages": [AIMessage(content=text)],
                 "response": text,
-                "sources": self.qa_agent._extract_sources(cases),
+                "sources": self.qa_agent.extract_sources(cases),
             }
         return {}
 

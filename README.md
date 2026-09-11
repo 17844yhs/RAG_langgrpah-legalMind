@@ -243,17 +243,17 @@ legal_mind/
 | 路径                                 | 方法   | 说明                     |
 | ------------------------------------ | ------ | ------------------------ |
 | `/health`                          | GET    | 健康检查                 |
-| `/api/auth/register`               | POST   | 用户注册                 |
-| `/api/auth/login`                  | POST   | 用户登录（返回 JWT）     |
-| `/api/chat/send`                   | POST   | 发送聊天消息（非流式）   |
-| `/api/chat/stream`                 | POST   | 发送聊天消息（SSE 流式） |
-| `/api/chat/resume`                 | POST   | 恢复 HITL 中断的会话     |
-| `/api/chat/sessions`               | GET    | 获取会话列表             |
-| `/api/chat/sessions/{id}/messages` | GET    | 获取会话消息             |
-| `/api/chat/sessions/{id}`          | DELETE | 删除会话                 |
-| `/api/documents/generate`          | POST   | 生成法律文书             |
-| `/api/cases/search`                | GET    | 搜索案例                 |
-| `/api/cases/list`                  | GET    | 获取案例列表             |
+| `/api/v1/auth/register`               | POST   | 用户注册                 |
+| `/api/v1/auth/login`                  | POST   | 用户登录（返回 JWT）     |
+| `/api/v1/chat/send`                   | POST   | 发送聊天消息（非流式）   |
+| `/api/v1/chat/stream`                 | POST   | 发送聊天消息（SSE 流式） |
+| `/api/v1/chat/resume`                 | POST   | 恢复 HITL 中断的会话     |
+| `/api/v1/chat/sessions`               | GET    | 获取会话列表             |
+| `/api/v1/chat/sessions/{id}/messages` | GET    | 获取会话消息             |
+| `/api/v1/chat/sessions/{id}`          | DELETE | 删除会话                 |
+| `/api/v1/documents/generate`          | POST   | 生成法律文书             |
+| `/api/v1/cases/search`                | GET    | 搜索案例                 |
+| `/api/v1/cases/list`                  | GET    | 获取案例列表             |
 
 ## 🧪 测试
 

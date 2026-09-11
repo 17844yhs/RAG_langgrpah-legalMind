@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from app.llm.model_client import get_llm
+from app.llm.prompts import INTENT_RECOGNIZE_PROMPT
 from app.cache.redis_cache import cache_get, cache_set, make_key
 from app.config import settings
 
@@ -60,9 +61,7 @@ class IntentAgent:
             return IntentResult(**cached)
         try:
             result = await self.structured_llm.ainvoke(
-                f"分析用户问题并判断意图。\n"
-                f"注意：问候、寒暄、感谢、无实质法律内容的闲聊应归类为 chitchat。\n"
-                f"用户问题：{query}"
+                INTENT_RECOGNIZE_PROMPT.format(query=query)
             )
             # function_calling 模式下模型拒答会返回 None 而非抛异常
             if result is None:

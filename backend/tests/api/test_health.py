@@ -33,7 +33,7 @@ async def test_unknown_route_returns_problem_details(client):
 
 async def test_validation_error_returns_400_with_fields(client):
     """参数校验失败 → 400（不是 FastAPI 默认 422）+ errors 扩展字段"""
-    resp = await client.post("/api/auth/register", json={"username": "x"})
+    resp = await client.post("/api/v1/auth/register", json={"username": "x"})
     assert resp.status_code == 400
     body = resp.json()
     assert body["code"] == "SYS_002"
@@ -46,6 +46,6 @@ async def test_validation_error_returns_400_with_fields(client):
 
 async def test_sse_endpoint_validation(client, auth_headers):
     """流式端点的参数校验同样走 400（空消息违反 min_length）"""
-    resp = await client.post("/api/chat/stream", headers=auth_headers, json={"message": ""})
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers, json={"message": ""})
     assert resp.status_code == 400
     assert resp.json()["code"] == "SYS_002"

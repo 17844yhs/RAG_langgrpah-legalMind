@@ -32,6 +32,8 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 # 把 rootdir（backend/）加入 sys.path，保证 `import app.*` 在任意平台/CI 生效
 pythonpath = ["."]
+# 覆盖率：只统计业务代码 app/，列出未覆盖行（本地与 CI 一致）
+addopts = "--cov=app --cov-report=term-missing"
 
 [tool.ruff]
 target-version = "py314"
@@ -58,5 +60,6 @@ extend-immutable-calls = ["fastapi.Depends"]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7",
     "ruff>=0.14",
 ]

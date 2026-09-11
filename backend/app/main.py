@@ -108,11 +108,14 @@ register_exception_handlers(app)
 # traceId 中间件：每个请求生成/透传排查 ID，响应头与错误体都会携带
 app.add_middleware(TraceIdMiddleware)
 
-from app.api import auth,chat,documents,cases
-app.include_router(auth.router,prefix="/api/auth",tags=["认证"])
-app.include_router(chat.router, prefix="/api/chat", tags=["聊天"])
-app.include_router(documents.router, prefix="/api/documents", tags=["文书"])
-app.include_router(cases.router, prefix="/api/cases", tags=["案例"])
+from app.api import auth, chat, documents, cases
+
+# API 版本化前缀：未来不兼容变更可并存 /api/v2，旧客户端不受影响
+API_V1_PREFIX = "/api/v1"
+app.include_router(auth.router, prefix=f"{API_V1_PREFIX}/auth", tags=["认证"])
+app.include_router(chat.router, prefix=f"{API_V1_PREFIX}/chat", tags=["聊天"])
+app.include_router(documents.router, prefix=f"{API_V1_PREFIX}/documents", tags=["文书"])
+app.include_router(cases.router, prefix=f"{API_V1_PREFIX}/cases", tags=["案例"])
 
 
 @app.get("/health")

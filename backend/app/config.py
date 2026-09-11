@@ -17,14 +17,16 @@ class Settings(BaseSettings):
     # 数据库配置（后续章节会添加更多配置项）
     DATABASE_URL: str = "postgresql://user:password@localhost:5432/legal_db"
     REDIS_URL: str = "redis://localhost:6379/0"
+    # psycopg/checkpoint 连接池上限（SSE 高并发时每连接占一个池位）
+    DB_POOL_MAX_SIZE: int = 20
 
-    # LLM 配置
-    LLM_PROVIDER: str = "openai"  # openai, anthropic, deepseek
+    # LLM 配置（provider 分支见 model_client._make：deepseek / openai / myopenai_ollama）
+    LLM_PROVIDER: str = "deepseek"
     LLM_API_KEY: str = ""
-    LLM_MODEL: str = "gpt-4-turbo-preview"
+    LLM_MODEL: str = "deepseek-chat"
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 4096
-    LLM_API_BASE :str = ""
+    LLM_API_BASE: str = ""
     # 背压控制（见 app/llm/model_client.py）：进程级并发 LLM 调用上限，
     # 超出后在信号量上排队等待而非全部涌入 API（防限流雪崩）
     LLM_MAX_CONCURRENCY: int = 16

@@ -78,12 +78,12 @@ function parseSSEStream(response, controller) {
 
 /**
  * 流式发送新消息
- * POST /api/chat/stream
+ * POST /api/v1/chat/stream
  */
 export function streamSendMessage(message, sessionId) {
   const controller = new AbortController()
 
-  const response = fetch('/api/chat/stream', {
+  const response = fetch('/api/v1/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -105,13 +105,13 @@ export function streamSendMessage(message, sessionId) {
 
 /**
  * 恢复被 interrupt 打断的图执行
- * POST /api/chat/resume
+ * POST /api/v1/chat/resume
  * 同样返回 SSE 流（因为 resume 后可能触发下一个 interrupt）
  */
 export function streamResumeMessage(sessionId, userResponse) {
   const controller = new AbortController()
 
-  const response = fetch('/api/chat/resume', {
+  const response = fetch('/api/v1/chat/resume', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

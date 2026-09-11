@@ -74,7 +74,7 @@ def patch_common(monkeypatch, workflow, *, intent="qa", confidence=0.95):
         return None
     monkeypatch.setattr(workflow.qa_agent, "extract_meta", extract_meta)
 
-    monkeypatch.setattr(workflow.qa_agent, "_extract_sources", lambda cases: ["来源1"])
+    monkeypatch.setattr(workflow.qa_agent, "extract_sources", lambda cases: ["来源1"])
 
 
 def build(workflow):

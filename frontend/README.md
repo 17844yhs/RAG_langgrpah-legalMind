@@ -69,7 +69,7 @@ src/
 
 - `Chat.vue` 在收到 interrupt 事件时，用 `InterruptCard` 组件替换输入区
 - `InterruptCard` 支持快捷选项点击和自定义文本输入
-- 用户提交后调用 `streamResumeMessage()` 触发 `/api/chat/resume` 端点
+- 用户提交后调用 `streamResumeMessage()` 触发 `/api/v1/chat/resume` 端点
 
 ## SSE 流式输出
 

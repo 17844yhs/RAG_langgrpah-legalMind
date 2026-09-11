@@ -17,6 +17,7 @@ from app.rag.retriever import HybridRetriever
 from app.rag.reranker import Reranker
 from app.config import settings
 from app.llm.model_client import get_llm
+from app.llm.prompts import RETRIEVAL_AGENT_SYSTEM_PROMPT
 from app.tools.search_tool import search_cases
 from app.cache.redis_cache import cache_get, cache_set, make_key
 
@@ -144,12 +145,7 @@ async def agent_node(state: RetrievalState) -> dict:
     llm = get_llm().bind_tools(_TOOLS)
     query = state.get("reformulated_query") or state["query"]
 
-    system = SystemMessage(content=(
-        "你是案例检索助手。根据用户问题提取法院(court)、年份(year)、案由(category)等结构化参数，"
-        "调用 search_cases 工具检索案例。\n"
-        "可用的案由类别：劳动争议、合同纠纷、婚姻家庭、知识产权、刑事、行政、交通事故、消费权益\n"
-        "如果首次检索结果不足，请调整查询关键词或放宽过滤条件重新检索。"
-    ))
+    system = SystemMessage(content=RETRIEVAL_AGENT_SYSTEM_PROMPT)
 
     # 首轮只有 system + human；retry 轮的消息链已含历史 ToolMessage 和
     # evaluate_node 注入的反思反馈，不再重复追加 query——

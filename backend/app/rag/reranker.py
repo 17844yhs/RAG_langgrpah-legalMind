@@ -13,10 +13,13 @@
     改用 sentence_transformers.CrossEncoder 直接调用。
 """
 import asyncio
+import logging
 import os
 from typing import List, Dict
 
 from sentence_transformers import CrossEncoder
+
+logger = logging.getLogger("app.rag")
 
 _LOCAL_MODEL_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models"
@@ -37,7 +40,7 @@ def _load_reranker_model(model_name: str) -> CrossEncoder:
     # 2. 从 ModelScope 下载
     try:
         from modelscope import snapshot_download
-        print(f"  从 ModelScope 下载 reranker: {model_name} ...")
+        logger.info("从 ModelScope 下载 reranker: %s ...", model_name)
         snapshot_download(model_name, local_dir=local_dir)
         return CrossEncoder(local_dir, max_length=_MAX_SEQ_LEN)
     except ImportError:

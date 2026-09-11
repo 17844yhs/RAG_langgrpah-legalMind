@@ -72,7 +72,7 @@ check_intent（HITL：置信度 < 0.8 → interrupt → 用户确认）
 支持多种 LLM 提供商，在 `.env` 中设置：
 
 ```ini
-LLM_PROVIDER=deepseek         # 可选: openai, anthropic, deepseek
+LLM_PROVIDER=deepseek         # 可选: deepseek, openai, myopenai_ollama
 LLM_API_KEY=sk-xxx
 LLM_MODEL=deepseek-chat
 LLM_API_BASE=https://api.deepseek.com/v1

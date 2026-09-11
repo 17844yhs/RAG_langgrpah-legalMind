@@ -70,7 +70,7 @@ async def test_stream_sse_contract(client, auth_headers, monkeypatch):
                                       "answer_meta": None},
            usage=(100, 50))
 
-    resp = await client.post("/api/chat/stream", headers=auth_headers,
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers,
                              json={"message": "工伤赔偿怎么算"})
 
     assert resp.status_code == 200
@@ -96,7 +96,7 @@ async def test_stream_persists_messages_with_usage(client, auth_headers, monkeyp
     _patch(monkeypatch, final_values={"sources": ["来源1"], "answer_meta": None},
            usage=(70, 30))
 
-    resp = await client.post("/api/chat/stream", headers=auth_headers,
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers,
                              json={"message": "试用期被辞退怎么办"})
 
     events = parse_sse(resp.text)
@@ -122,7 +122,7 @@ async def test_stream_appexception_becomes_sse_error_event(client, auth_headers,
 
     monkeypatch.setattr(chat_mod, "workflow", BoomWorkflow())
 
-    resp = await client.post("/api/chat/stream", headers=auth_headers,
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers,
                              json={"message": "触发异常"})
     assert resp.status_code == 200    # SSE 已开始，HTTP 层不回错
 
@@ -143,7 +143,7 @@ async def test_stream_unexpected_error_masks_detail(client, auth_headers, monkey
 
     monkeypatch.setattr(chat_mod, "workflow", CrashWorkflow())
 
-    resp = await client.post("/api/chat/stream", headers=auth_headers,
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers,
                              json={"message": "触发崩溃"})
     events = parse_sse(resp.text)
     err = events[-2]["error"]

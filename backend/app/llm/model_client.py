@@ -117,27 +117,12 @@ def _init_llm():
                               **common)
         elif provider == "openai":
             return _ThrottledOpenAI(model=settings.LLM_MODEL, openai_api_key=settings.LLM_API_KEY, **common)
-        elif provider == "myopenai_ollma":
+        elif provider == "myopenai_ollama":
             return _ThrottledOpenAI(model="qwen2.5:0.5b", openai_api_key=settings.LLM_API_KEY,
                               openai_api_base="http://127.0.0.1:11434/v1", **common)
         else:
-            raise ValueError(f'不支持这个服务商:{provider}')
+            raise ValueError(f"不支持的 LLM provider: {provider}")
 
     main = _make(settings.LLM_PROVIDER)
     backup = _make(settings.LLM_PROVIDER)
     return main.with_fallbacks([backup], exceptions_to_handle=_LLM_ERRORS)
-
-
-class LLMClient:
-    def __init__(self):
-        self.llm= get_llm()
-
-    async def generate(self,prompt:str) ->str:
-        resp = await self.llm.ainvoke(prompt)
-        return resp.content
-        
-    async def stream(self,prompt:str):
-        # 必须用 astream 而不能用原来的stream：RunnableWithFallbacks.stream() 返回同步 generator，
-        # 无法 async for（裸 ChatModel 能跑是 langchain 兼容行为，包装后不保证）
-        async for chunk in self.llm.astream(prompt):
-            yield chunk.content

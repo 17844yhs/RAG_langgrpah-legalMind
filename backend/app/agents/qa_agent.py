@@ -96,7 +96,7 @@ class QAAgent:
             return None
 
     def build_messages(self, cases: List[Dict], messages: List[BaseMessage],
-                       summary: str = None, reflection_feedback: str = None) -> List[BaseMessage]:
+                       summary: str | None = None, reflection_feedback: str | None = None) -> List[BaseMessage]:
         """组装 LLM 输入消息：system（人设 + 案例上下文）+ [历史摘要] + [质量修正反馈] + 对话历史视图。
 
         - 案例作为当轮 system 注入，绝不进入长期累积的 messages
@@ -166,17 +166,21 @@ class QAAgent:
             logger.exception("历史摘要压缩失败，降级为仅裁剪")
             return prev_summary or ""
 
-    async def answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None,reflection_feedback:str=None) ->List[BaseMessage]:
+    async def answer(self, cases: List[Dict], messages: List[BaseMessage] | None = None,
+                     summary: str | None = None, reflection_feedback: str | None = None) -> dict:
+        """非流式问答（脚本/调试用，主链路走 stream_answer）"""
         response = await self.qa_chain.ainvoke(
             {"cases": cases, "messages": messages or [], "summary": summary,
              "reflection_feedback": reflection_feedback}
         )
 
-        sources = self._extract_sources(cases)
+        sources = self.extract_sources(cases)
 
-        return {"answer":response,"sources":sources}
+        return {"answer": response, "sources": sources}
 
-    async def stream_answer(self,cases:List[Dict],messages:List[BaseMessage]=None,summary:str=None,reflection_feedback:str=None):
+    async def stream_answer(self, cases: List[Dict], messages: List[BaseMessage] | None = None,
+                            summary: str | None = None, reflection_feedback: str | None = None):
+        """流式问答：逐 token 产出 AIMessageChunk（打字机效果的主链路）"""
         async for chunk in self.qa_chain.astream(
             {"cases": cases, "messages": messages or [], "summary": summary,
              "reflection_feedback": reflection_feedback}
@@ -206,31 +210,11 @@ class QAAgent:
                 f"相关法条：{case.get('laws', '未知')}\n"
             )
         return "\n".join(formatted)
-    
-    def _format_history(self, context: List[Dict]) -> str:
-        """
-        将对话历史格式化为字符串，仅保留最近5条消息。
 
-        参数:
-            context (List[Dict]): 对话历史，每条消息包含 role（"user" 或 "assistant"）和 content。
-
-        返回:
-            str: 格式化后的对话历史字符串，如：
-                用户：你好
-                助手：您好，请问有什么法律问题？
-        """      
-        if not context:
-            return ""
-        formatted = []
-        # 仅保留最近5条对话
-        for msg in context[-5:]:
-            role = "用户" if msg.get("role") == "user" else "助手"
-            formatted.append(f"{role}：{msg.get('content', '')}")
-        return "\n".join(formatted)
-
-    def _extract_sources(self, cases: List[Dict]) -> List[Dict]:
+    def extract_sources(self, cases: List[Dict]) -> List[Dict]:
         """
         从案例列表中提取前3个作为回答的引用来源。
+        （公开方法：workflow 层也会调用，勿改回下划线私有命名）
 
         参数:
             cases (List[Dict]): 案例列表。
