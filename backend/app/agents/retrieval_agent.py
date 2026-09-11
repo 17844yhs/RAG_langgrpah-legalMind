@@ -72,6 +72,15 @@ class RetrievalAgent:
                             documents=candidates,
                             top_k=top_k
                         )
+            # 分数阈值过滤：rerank 分低于阈值视为不相关。
+            # 实测（diag_retrieval.py）：强相关 0.55-0.99，噪声填充 ≤0.15，
+            # 不设阈值时离谱查询也硬凑 top_k 条噪声 → LLM 拿噪声硬答（幻觉温床）。
+            # 返回空列表 = 上层走"无参考"兜底，而非编造。
+            if settings.RAG_SCORE_THRESHOLD > 0:
+                ranked_results = [
+                    c for c in ranked_results
+                    if (c.get("rerank_score") or 0) >= settings.RAG_SCORE_THRESHOLD
+                ]
             await cache_set(cache_key, ranked_results, settings.RETRIEVAL_CACHE_TTL)
             return ranked_results
         results = candidates[:top_k]

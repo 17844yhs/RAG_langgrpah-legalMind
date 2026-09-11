@@ -22,6 +22,7 @@ async def build_index():
     from app.models.law import Law
 
     all_chunks = []
+    skipped = []
 
     # ── 1. 索引案例（500字切分）──
     cases = await Case.all()
@@ -31,6 +32,12 @@ async def build_index():
         separators=["\n\n", "\n", "。", "；", "，", " "],
     )
     for case in cases:
+        # 无正文也无摘要的案例只产出纯标题碎片 chunk（实测 40% 超短 chunk 的来源之一），
+        # 检索命中这种 chunk 毫无参考价值，直接跳过
+        body = (case.summary or "") + (case.content or "")
+        if len(body.strip()) < 50:
+            skipped.append(f"案例《{case.title}》内容不足50字")
+            continue
         doc = Document(
             page_content=f"{case.title}\n{case.summary or ''}\n{case.content or ''}",
             metadata={
@@ -57,6 +64,9 @@ async def build_index():
     )
     for law in laws:
         keywords_str = " ".join(law.keywords) if law.keywords else ""
+        if len(law.content.strip()) < 50:
+            skipped.append(f"法条《{law.title}》内容不足50字")
+            continue
         doc = Document(
             page_content=f"{law.title}\n{law.content}\n{keywords_str}",
             metadata={
@@ -69,6 +79,11 @@ async def build_index():
         )
         all_chunks.extend(law_splitter.split_documents([doc]))
     print(f"  法律法规：{len(laws)} 条")
+
+    if skipped:
+        print(f"  ⚠ 跳过 {len(skipped)} 条无实质内容的文档：")
+        for s in skipped:
+            print(f"    - {s}")
 
     if not all_chunks:
         print("  数据库中没有数据，请先运行 import_eval_data.py")
