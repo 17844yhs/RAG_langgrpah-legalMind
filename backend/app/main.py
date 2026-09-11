@@ -73,6 +73,12 @@ async def _prewarm_retrieval():
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     """应用生命周期：启动时连数据库，关闭时断开"""
+    # 安全哨兵：默认 JWT 密钥 = 任何人都能伪造 token，生产环境必须显式配置
+    if settings.SECRET_KEY == "secret-key":
+        logger.warning(
+            "SECRET_KEY 仍为默认值 'secret-key'——JWT 可被任意伪造！"
+            "请在 .env 中配置强随机密钥（openssl rand -hex 32）"
+        )
     await init_db()
     await init_vector_store()
     await init_checkpointer()

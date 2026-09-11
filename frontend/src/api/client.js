@@ -38,8 +38,8 @@ client.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
-      // 不在页面刷新时直接跳转，由 router guard 处理
-      window.location.hash = '#/login'
+      // history 模式路由：hash 赋值不触发 vue-router 导航，必须整页跳转
+      window.location.href = '/login'
     }
     return Promise.reject(error)
   }
