@@ -1,10 +1,11 @@
 """LangGraph 工作流编排 — 定义 Agent 之间的协作流程（含 Human-in-the-Loop）"""
 import json
 import logging
+import operator
 import random
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
-from langgraph.types import Command
+from langgraph.types import Command, Send
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 
@@ -12,6 +13,11 @@ from app.agents.intent_agent import IntentAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.document_agent import DocumentAgent
 from app.agents.retrieval_agent import retrieval_subgraph
+from app.agents.supervisor import (
+    domain_supervisor_node,
+    specialist_node,
+    combiner_node,
+)
 from app.agents.human_loop import check_intent, info_gathering
 from app.llm.checkpoint import get_checkpointer
 from app.llm.context_manager import split_history, estimate_chars
@@ -36,6 +42,11 @@ class AgentState(TypedDict):
     sources: list                 # 来源引用
     answer_meta: dict             # 回答元数据（summary/risk_level/applicable_laws）
     messages: Annotated[list[BaseMessage], add_messages]  # 对话历史（checkpoint 全量保留）
+    # ── 层级 Agent 团队（Supervisor→Specialists→Combiner，见 app/agents/supervisor.py）──
+    domains: list                 # supervisor 识别的法律领域（空 = 走通用 ReAct 通道）
+    # 并行专家分支累积器：多份 Send 实例同写一个 key，必须用 reducer 累加
+    # （无 reducer 时后写覆盖先写，会随机丢专家结果）
+    specialist_results: Annotated[list, operator.add]
     # ── Context 管理（防对话无限增长导致 Context 爆炸）──
     context_summary: str          # 被裁掉的最老轮次的压缩摘要（结构化事实）
     summarized_count: int         # 已被摘要覆盖的 messages 前缀条数（增量摘要游标）
@@ -77,12 +88,36 @@ class LegalMindWorkflow:
         })
 
         # info_gathering 自循环：info_sufficient=False → 回自己；True → 按意图路由
-        workflow.add_conditional_edges("info_gathering", self._route_after_info, {
-            "qa": "retrieval_agent",
-            "search": "retrieval_agent",
-            "document": "document_generation",
-            "loop": "info_gathering",   # 自循环：信息不足时回到自己
-        })
+        # qa/search 的检索入口二选一（构建时定死，运行时无分支开销）：
+        #   层级团队开 → domain_supervisor（领域专家并行）｜关 → retrieval_agent（原 ReAct 单线）
+        if settings.AGENT_TEAM_ENABLED:
+            workflow.add_node("domain_supervisor", domain_supervisor_node)
+            workflow.add_node("specialist", specialist_node)   # Send 动态多实例
+            workflow.add_node("combiner", combiner_node)
+            workflow.add_conditional_edges("info_gathering", self._route_after_info, {
+                "qa": "domain_supervisor",
+                "search": "domain_supervisor",
+                "document": "document_generation",
+                "loop": "info_gathering",   # 自循环：信息不足时回到自己
+            })
+            # supervisor：有领域 → Send fan-out 并行专家；无领域 → 通用 ReAct
+            workflow.add_conditional_edges("domain_supervisor", self._route_after_supervisor, {
+                "general": "retrieval_agent",
+            })
+            workflow.add_edge("specialist", "combiner")
+            # combiner：合并足够 → 正常下游；不足 → 升级 ReAct 深度检索兜底
+            workflow.add_conditional_edges("combiner", self._route_after_team, {
+                "escalate": "retrieval_agent",
+                "qa": "qa_generation",
+                "search": "final_output",
+            })
+        else:
+            workflow.add_conditional_edges("info_gathering", self._route_after_info, {
+                "qa": "retrieval_agent",
+                "search": "retrieval_agent",
+                "document": "document_generation",
+                "loop": "info_gathering",   # 自循环：信息不足时回到自己
+            })
 
         # retrieval_agent（ReAct 子图）→ (条件路由)
         workflow.add_conditional_edges("retrieval_agent", self._route_after_retrieval, {
@@ -257,6 +292,23 @@ class LegalMindWorkflow:
         else:
             return "qa"
 
+    def _route_after_supervisor(self, state: AgentState) -> "list[Send] | str":
+        """supervisor 路由：识别到领域 → Send 并行派发（动态 fan-out）；
+        无领域（LLM 失败/问题笼统）→ 通用 ReAct 通道"""
+        domains = state.get("domains") or []
+        if not domains:
+            return "general"
+        return [
+            Send("specialist", {"domain": d, "query": state["query"]})
+            for d in domains
+        ]
+
+    def _route_after_team(self, state: AgentState) -> str:
+        """combiner 路由：合并结果充足 → 按意图走下游；不足 → 升级 ReAct 兜底"""
+        if len(state.get("retrieved_cases") or []) < settings.TEAM_MERGE_MIN_CASES:
+            return "escalate"
+        return "search" if state["intent"] == "search" else "qa"
+
     def _route_after_gate(self, state: AgentState) -> str:
         """质量门控路由：不通过→重试，通过/降级放行→final_output"""
         return "pass" if state.get("reflection_passed") else "retry"
@@ -329,9 +381,11 @@ class LegalMindWorkflow:
                 stage = self._stage_from_update(node_name, output or {}, intent)
                 if stage is None:
                     continue
+                # 归一化：specialist 并行分支一次返回多条阶段事件
+                for s in (stage if isinstance(stage, list) else [stage]):
+                    yield {"type": "stage", "stage": s}
                 if node_name == "intent_recognition":
                     intent = (output or {}).get("intent")
-                yield {"type": "stage", "stage": stage}
 
     @staticmethod
     def _stage(stage: str, status: str, text: str) -> dict:
@@ -352,6 +406,27 @@ class LegalMindWorkflow:
             if intent == "document":
                 return self._stage("document", "running", "正在生成法律文书...")
             return self._stage("retrieval", "running", "正在检索相关案例...")
+        if node_name == "domain_supervisor":
+            domains = output.get("domains") or []
+            if not domains:
+                return None  # 走通用 ReAct，后续 retrieval_agent 事件照常推送
+            return self._stage("team", "running", f"已分派领域专家（{'、'.join(domains)}）并行检索...")
+        if node_name == "specialist":
+            # 并行专家分支：每个领域一条独立时间线（stage 键含领域名，前端按名累积）
+            stages = []
+            for r in output.get("specialist_results") or []:
+                domain = r.get("domain") or "通用"
+                count = len(r.get("cases") or [])
+                stages.append(self._stage(
+                    f"specialist_{domain}", "done", f"{domain}领域专家：检索到 {count} 条相关案例"
+                ))
+            return stages or None
+        if node_name == "combiner":
+            count = len(output.get("retrieved_cases") or [])
+            if count < settings.TEAM_MERGE_MIN_CASES:
+                # 升级 ReAct：retrieval 行保持 running，等 retrieval_agent 完成再置 done
+                return self._stage("retrieval", "running", "专家检索结果不足，正在深度检索补充...")
+            return self._stage("retrieval", "done", f"专家并行检索完成，合并去重后保留 {count} 条案例")
         if node_name == "retrieval_agent":
             count = len(output.get("retrieved_cases") or [])
             return self._stage("retrieval", "done", f"找到 {count} 条相关案例")

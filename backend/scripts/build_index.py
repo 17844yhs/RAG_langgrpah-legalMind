@@ -64,8 +64,11 @@ async def build_index():
     )
     for law in laws:
         keywords_str = " ".join(law.keywords) if law.keywords else ""
-        if len(law.content.strip()) < 50:
-            skipped.append(f"法条《{law.title}》内容不足50字")
+        # <50 字跳过只针对案例碎片；短条文（一两句话的基础条文）是合法数据，
+        # 跳过会导致其进不了向量/BM25 双路索引（曾误伤 1074 条：诚信原则、
+        # 公序良俗等高频引用条文）。仅跳过完全无正文的纯标题行。
+        if not law.content.strip():
+            skipped.append(f"法条《{law.title}》无正文，仅标题")
             continue
         doc = Document(
             page_content=f"{law.title}\n{law.content}\n{keywords_str}",

@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     REFLECTION_MAX_ROUNDS: int = 1     # 重试轮数上限（1 = 最多重新生成一次，防止无限循环）
     REFLECTION_SCORE_THRESHOLD: float = 0.6  # 质量分数线（低于则视为不通过）
 
+    # 层级 Agent 团队（Supervisor→Specialists→Combiner，见 app/agents/supervisor.py）
+    AGENT_TEAM_ENABLED: bool = True    # 总开关（关闭则 qa/search 走原 ReAct 单线检索）
+    MAX_SPECIALISTS: int = 2           # 最多并行派发的领域专家数（控制延迟与 token 成本）
+    TEAM_MERGE_MIN_CASES: int = 3      # 合并结果低于此数 → 升级走原 ReAct generalist 兜底
+
     # Redis 缓存（见 app/cache/redis_cache.py）：意图识别缓存 + 检索结果缓存
     # 缓存是加速器不是依赖：False 或 Redis 不可达时自动降级直连，业务零感知
     CACHE_ENABLED: bool = True
