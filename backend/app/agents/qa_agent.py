@@ -107,7 +107,7 @@ class QAAgent:
         """
         system_content = (
             QA_SYSTEM_PROMPT
-            + "\n\n## 相关案例\n"
+            + "\n\n## 检索参考（案例与法条）\n"
             + self._format_cases(cases)
         )
         msgs: List[BaseMessage] = [SystemMessage(content=system_content)]
@@ -189,26 +189,40 @@ class QAAgent:
     
     def _format_cases(self,cases:List[Dict]) ->str:
         """
-        将检索到的案例列表格式化为字符串，便于注入到提示模板中。
+        将检索结果格式化为字符串，便于注入到提示模板中。
+
+        案例 chunk 注入元数据级紧凑摘要（标题/案号/法院/裁判要旨/法条）——
+        全文只参与 rerank，进 prompt 的是摘要，这本身即零成本上下文压缩。
+        法条 chunk 的条文正文只在 content 字段（元数据无 summary/laws），
+        必须回退注入条文原文（截断 400 字），否则 LLM 只能看到法条标题。
+        quality_gate 复用本方法，条文原文对评审同样可见（忠实性判定有据）。
 
         参数:
-            cases (List[Dict]): 案例字典列表，每个字典应包含 title、case_number、court、summary、laws 等字段。
+            cases (List[Dict]): 检索结果字典列表（type 为 "case" 或 "law"）。
 
         返回:
-            str: 格式化后的案例文本；若无案例，则返回“暂无相关案例参考。”
+            str: 格式化后的参考文本；若无结果，返回提示文本。
         """
         if not cases:
-            return "暂无相关案例参考。"
+            return "暂无相关案例或法条参考。"
         formatted = []
         for i, case in enumerate(cases, 1):
-            formatted.append(
-                f"【案例{i}】\n"
-                f"标题：{case.get('title', '未知')}\n"
-                f"案号：{case.get('case_number', '未知')}\n"
-                f"法院：{case.get('court', '未知')}\n"
-                f"裁判要旨：{case.get('summary', '未知')}\n"
-                f"相关法条：{case.get('laws', '未知')}\n"
-            )
+            if case.get("type") == "law":
+                content = (case.get("content") or "").strip()
+                formatted.append(
+                    f"【法条{i}】\n"
+                    f"名称：{case.get('title', '未知')}\n"
+                    f"条文：{content[:400] if content else '未知'}\n"
+                )
+            else:
+                formatted.append(
+                    f"【案例{i}】\n"
+                    f"标题：{case.get('title', '未知')}\n"
+                    f"案号：{case.get('case_number', '未知')}\n"
+                    f"法院：{case.get('court', '未知')}\n"
+                    f"裁判要旨：{case.get('summary', '未知')}\n"
+                    f"相关法条：{case.get('laws', '未知')}\n"
+                )
         return "\n".join(formatted)
 
     def extract_sources(self, cases: List[Dict]) -> List[Dict]:
