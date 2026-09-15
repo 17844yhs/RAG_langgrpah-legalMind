@@ -87,6 +87,11 @@ class RetrievalAgent:
                     c for c in ranked_results
                     if (c.get("rerank_score") or 0) >= settings.RAG_SCORE_THRESHOLD
                 ]
+            # API 契约自洽：rerank 分数回写 score 字段——
+            # _doc_to_dict 的 metadata["score"] 恒为 0（向量库无该元数据），
+            # cases/search 前端/调用方读 score 拿到的曾是全 0
+            for c in ranked_results:
+                c["score"] = c.get("rerank_score", 0)
             await cache_set(cache_key, ranked_results, settings.RETRIEVAL_CACHE_TTL)
             return ranked_results
         results = candidates[:top_k]

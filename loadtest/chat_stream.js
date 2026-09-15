@@ -89,10 +89,10 @@ export function setup() {
   };
   const headers = { 'Content-Type': 'application/json' };
 
-  let res = http.post(`${BASE_URL}/api/auth/register`, JSON.stringify(creds), { headers });
+  let res = http.post(`${BASE_URL}/api/v1/auth/register`, JSON.stringify(creds), { headers });
   if (res.status !== 200) {
     // 已存在（多次运行）则登录
-    res = http.post(`${BASE_URL}/api/auth/login`, JSON.stringify(creds), { headers });
+    res = http.post(`${BASE_URL}/api/v1/auth/login`, JSON.stringify(creds), { headers });
   }
   check(res, { 'auth 获取 token 成功': (r) => r.status === 200 });
   const token = res.status === 200 ? res.json('access_token') : '';
@@ -112,7 +112,7 @@ export function infraScenario() {
 // ── 场景 2：SSE 流式问答（完整消费流，事后解析响应体）──
 export function chatScenario(data) {
   const res = http.post(
-    `${BASE_URL}/api/chat/stream`,
+    `${BASE_URL}/api/v1/chat/stream`,
     JSON.stringify({ message: CHAT_QUESTION }),
     {
       headers: {
