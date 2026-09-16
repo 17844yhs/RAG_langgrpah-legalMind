@@ -32,6 +32,7 @@ def split_history(messages: list[BaseMessage], budget: int = None):
     n = len(msgs)
     if n == 0:
         return [], []
+    # 历史视图预算：默认 6000 字
     budget = budget if budget is not None else settings.HISTORY_CHAR_BUDGET
 
     # 后缀字符和：suffix[i] = msgs[i:] 的体量

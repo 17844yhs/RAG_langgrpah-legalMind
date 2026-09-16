@@ -165,7 +165,7 @@ class TraceIdMiddleware:
 
         start = time.perf_counter()
         status_code = 0
-
+        # 包装 send 函数，确保在响应头中添加 traceId
         async def send_wrapper(message):
             nonlocal status_code
             if message["type"] == "http.response.start":
