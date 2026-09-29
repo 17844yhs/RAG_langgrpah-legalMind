@@ -73,7 +73,8 @@ async def _prewarm_retrieval():
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     """应用生命周期：启动时连数据库，关闭时断开"""
-    # 安全哨兵：默认 JWT 密钥 = 任何人都能伪造 token，生产环境必须显式配置
+    # 安全哨兵：生产环境默认密钥已在 Settings 校验中拒绝启动（config._security_sentinel）；
+    # DEBUG 模式放行默认密钥便于本地联调，但仍打警告提醒
     if settings.SECRET_KEY == "secret-key":
         logger.warning(
             "SECRET_KEY 仍为默认值 'secret-key'——JWT 可被任意伪造！"
@@ -100,13 +101,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 跨域配置，允许前端访问
+# 跨域配置：来源白名单来自配置（生产用 CORS_ORIGINS 环境变量收敛到部署域名）；
+# 方法/头按实际需要显式列举，不用 "*"（13.5 安全加固）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # 全局异常处理：所有错误响应统一走 RFC 9457 Problem Details 格式

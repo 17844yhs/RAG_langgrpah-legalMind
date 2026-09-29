@@ -1,6 +1,7 @@
 """应用配置管理"""
 from typing import List
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -9,9 +10,23 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
 
-    # 认证配置（SECRET_KEY 用默认值时 lifespan 启动即告警——生产必须显式配置）
+    # 认证配置（生产 fail-fast 校验见 _security_sentinel；DEBUG 模式放行默认值便于本地联调）
     SECRET_KEY: str = "secret-key"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
+    @model_validator(mode="after")
+    def _security_sentinel(self):
+        """安全哨兵：生产环境（DEBUG=False）默认 JWT 密钥直接拒绝启动。
+
+        默认密钥 = 任何人都能伪造 token，fail-fast 优于带病运行（17.4）。
+        本地 .env 需显式配置强随机密钥：openssl rand -hex 32
+        """
+        if not self.DEBUG and self.SECRET_KEY == "secret-key":
+            raise RuntimeError(
+                "SECRET_KEY 仍为默认值 'secret-key'，生产环境拒绝启动。"
+                "请在 .env 配置强随机密钥（openssl rand -hex 32）"
+            )
+        return self
 
     # 数据库配置（后续章节会添加更多配置项）
     DATABASE_URL: str = "postgresql://user:password@localhost:5432/legal_db"
