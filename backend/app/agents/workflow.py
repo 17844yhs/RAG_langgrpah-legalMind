@@ -21,6 +21,7 @@ from app.agents.supervisor import (
 from app.agents.human_loop import check_intent, info_gathering
 from app.llm.checkpoint import get_checkpointer
 from app.llm.context_manager import split_history, estimate_chars
+from app.llm.guardrails import check_input_guardrail, find_output_violation, OUTPUT_FALLBACK
 from app.config import settings
 
 logger = logging.getLogger("app.workflow")
@@ -76,11 +77,16 @@ class LegalMindWorkflow:
         workflow.add_node("quality_gate", self._quality_gate_node)  # Self-Reflection 质量门控
         workflow.add_node("document_generation", self._document_node)
         workflow.add_node("chitchat_reply", self._chitchat_node)  # 问候快速通道（0 次 LLM）
+        workflow.add_node("input_guardrail", self._guardrail_node)  # Pre Model Hook（14.1 模型护栏）
         workflow.add_node("final_output", self._output_node)
 
         # 添加图结构
-        # intent_recognition → check_intent →（chitchat 快速通道 | info_gathering 自循环）→ 路由
-        workflow.set_entry_point("intent_recognition")
+        # Pre Model Hook（14.1）：入口护栏 →（命中：短路 final_output，0 次 LLM ｜ 放行）→ 意图识别
+        workflow.set_entry_point("input_guardrail")
+        workflow.add_conditional_edges("input_guardrail", self._route_after_guardrail, {
+            "blocked": "final_output",
+            "pass": "intent_recognition",
+        })
         workflow.add_edge("intent_recognition", "check_intent")
         workflow.add_conditional_edges("check_intent", self._route_after_check, {
             "chitchat": "chitchat_reply",   # 高置信问候 → 跳过信息收集/检索/质量门
@@ -147,6 +153,25 @@ class LegalMindWorkflow:
             "intent_confidence": result.confidence,
         }
 
+    async def _guardrail_node(self, state: AgentState) -> dict:
+        """Pre Model Hook（14.1）：入口输入护栏，命中风险输入直接短路（0 次 LLM）
+
+        规则宁少勿滥（高精度低召回），拒绝话术与模式见 app/llm/guardrails.py。
+        """
+        refusal = check_input_guardrail(state.get("query", ""))
+        if refusal:
+            logger.info("输入护栏命中，已拦截：%s", state.get("query", "")[:40])
+            return {
+                "response": refusal,
+                "messages": [AIMessage(content=refusal)],
+                "intent": "blocked",
+                "sources": [],
+            }
+        return {}
+
+    def _route_after_guardrail(self, state: AgentState) -> str:
+        return "blocked" if state.get("intent") == "blocked" else "pass"
+
     async def _qa_node(self, state: AgentState) -> dict:
         cases = state["retrieved_cases"]
         all_msgs = list(state["messages"])
@@ -197,6 +222,25 @@ class LegalMindWorkflow:
         - 开关关闭 → 直通（不花评审 LLM 调用）
         """
         response = state.get("response", "")
+
+        # ── Post Model Hook（14.1）：确定性输出校验先行，违规不花 LLM 评审调用 ──
+        violation = find_output_violation(response)
+        if violation:
+            round_used = state.get("reflection_round", 0)
+            if round_used < settings.REFLECTION_MAX_ROUNDS:
+                logger.info("输出护栏命中（%s），注入反馈重试", violation)
+                return {
+                    "reflection_feedback": f"输出安全校验未通过：{violation}，请重新生成合规回答",
+                    "reflection_round": round_used + 1,
+                }
+            # 重试额度用尽：违规内容不放行，替换为兜底话术
+            logger.warning("输出护栏命中且重试额度用尽，替换为兜底回复")
+            return {
+                "messages": [AIMessage(content=OUTPUT_FALLBACK)],
+                "response": OUTPUT_FALLBACK,
+                "reflection_passed": True,
+                "reflection_feedback": "",
+            }
 
         if not settings.REFLECTION_ENABLED:
             return {"messages": [AIMessage(content=response)], "reflection_passed": True}
