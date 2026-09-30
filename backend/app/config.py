@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     MAX_SPECIALISTS: int = 2           # 最多并行派发的领域专家数（控制延迟与 token 成本）
     TEAM_MERGE_MIN_CASES: int = 3      # 合并结果低于此数 → 升级走原 ReAct generalist 兜底
 
+    # 图级保险丝（14.9）：业务守卫防"设计内循环"（追问/重试各有上限），
+    # recursion_limit 防"设计外死循环"（条件边路由 bug → A→B→A 震荡）
+    GRAPH_RECURSION_LIMIT: int = 25    # LangGraph 全图步数上限，超限抛 GraphRecursionError
+    GRAPH_NODE_TIMEOUT: float = 60.0   # 短时非流式 LLM 节点运行超时（秒），防 hang；
+                                       # 长流式节点（qa/document）与 HITL interrupt 节点不适用
+
     # Redis 缓存（见 app/cache/redis_cache.py）：意图识别缓存 + 检索结果缓存
     # 缓存是加速器不是依赖：False 或 Redis 不可达时自动降级直连，业务零感知
     CACHE_ENABLED: bool = True

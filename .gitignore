@@ -42,6 +42,7 @@ Thumbs.db
 优化项目.md
 UPGRADE_PLAN.md
 INTERVIEW_PREP.md
+面试.md
 # Vector store local data (matches at any level, e.g. backend/data/chroma/)
 data/chroma/
 # BM25 索引（可由 scripts/build_index.py 重建，不进版本库）

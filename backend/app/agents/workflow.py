@@ -6,7 +6,7 @@ import random
 from uuid import uuid4
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
-from langgraph.types import Command, Send
+from langgraph.types import Command, Send, TimeoutPolicy
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, RemoveMessage
 from langgraph.graph.message import add_messages
 
@@ -95,13 +95,19 @@ class LegalMindWorkflow:
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(AgentState)
 
-        #  添加节点 
-        workflow.add_node("intent_recognition", self._intent_node)
+        #  添加节点
+        # timeout 只加短时非流式 LLM 节点（防 hang）：结构化/有界输出 60s 必够；
+        # qa_generation/document_generation 长流式（合法运行可超时，加了会误杀）、
+        # check_intent/info_gathering/retrieval_agent 含 HITL interrupt（挂起语义与
+        # run_timeout 冲突）——均不加，hang 风险由 LLM 客户端自身超时兜底
+        workflow.add_node("intent_recognition", self._intent_node,
+                          timeout=TimeoutPolicy(run_timeout=settings.GRAPH_NODE_TIMEOUT))
         workflow.add_node("check_intent", check_intent)          # HITL #1：意图确认（一次性）
         workflow.add_node("info_gathering", info_gathering)     # HITL #2：多轮信息收集（自循环）
         workflow.add_node("retrieval_agent", retrieval_subgraph)  # ReAct 检索子图（内含 HITL #3）
         workflow.add_node("qa_generation", self._qa_node)
-        workflow.add_node("quality_gate", self._quality_gate_node)  # Self-Reflection 质量门控
+        workflow.add_node("quality_gate", self._quality_gate_node,
+                          timeout=TimeoutPolicy(run_timeout=settings.GRAPH_NODE_TIMEOUT))  # Self-Reflection 质量门控
         workflow.add_node("document_generation", self._document_node)
         workflow.add_node("chitchat_reply", self._chitchat_node)  # 问候快速通道（0 次 LLM）
         workflow.add_node("input_guardrail", self._guardrail_node)  # Pre Model Hook（14.1 模型护栏）
@@ -124,6 +130,8 @@ class LegalMindWorkflow:
         # qa/search 的检索入口二选一（构建时定死，运行时无分支开销）：
         #   层级团队开 → domain_supervisor（领域专家并行）｜关 → retrieval_agent（原 ReAct 单线）
         if settings.AGENT_TEAM_ENABLED:
+            # 团队三节点是同步函数——LangGraph 限制 timeout 仅支持 async 节点
+            # （同步执行无法在进程内安全取消），故不加；其 hang 风险由 LLM 客户端超时兜底
             workflow.add_node("domain_supervisor", domain_supervisor_node)
             workflow.add_node("specialist", specialist_node)   # Send 动态多实例
             workflow.add_node("combiner", combiner_node)
@@ -447,8 +455,21 @@ class LegalMindWorkflow:
             logger.warning("用户长期记忆加载失败，本次不注入背景", exc_info=True)
             return []
 
+    @staticmethod
+    def _make_config(thread_id: str) -> dict:
+        """统一入口 config：thread_id + recursion_limit（14.9 图级保险丝）。
+
+        业务守卫（追问≤3/补充≤1/gate≤1）防"设计内循环"；recursion_limit 防
+        "设计外死循环"（条件边路由 bug → A→B→A 震荡），超限抛 GraphRecursionError。
+        4 个入口（run/astream/astream_resume/astream_continue）共用，语义一致。
+        """
+        return {
+            "recursion_limit": settings.GRAPH_RECURSION_LIMIT,
+            "configurable": {"thread_id": thread_id},
+        }
+
     async def run(self, query: str, thread_id: str, user_id: str | None = None) -> dict:
-        config = {"configurable": {"thread_id": thread_id}}
+        config = self._make_config(thread_id)
         user_msg_id = f"user-{uuid4().hex}"
         init_state = {
             "query": query,
@@ -462,7 +483,7 @@ class LegalMindWorkflow:
 
     async def astream(self, query: str, thread_id: str, user_id: str | None = None):
         """正常流程：发送新消息，流式返回 token + 阶段进度事件"""
-        config = {"configurable": {"thread_id": thread_id}}
+        config = self._make_config(thread_id)
         user_msg_id = f"user-{uuid4().hex}"
         init_state = {
             "query": query,
@@ -480,7 +501,7 @@ class LegalMindWorkflow:
         用 Command(resume=user_response) 恢复 LangGraph 的 interrupt 点，
         图会从暂停处继续执行（不从头开始，因此不发意图识别的阶段事件）。
         """
-        config = {"configurable": {"thread_id": thread_id}}
+        config = self._make_config(thread_id)
         async for event in self._astream_events(Command(resume=user_response), config, with_intro=False):
             yield event
 
@@ -492,7 +513,7 @@ class LegalMindWorkflow:
         恢复粒度=节点边界：中断时未完成的节点整体重跑（token 级续传不存在），
         消息不重复靠 add_messages 按 id 去重 + 用户消息显式 id（12.x 重要性过滤同款）。
         """
-        config = {"configurable": {"thread_id": thread_id}}
+        config = self._make_config(thread_id)
         async for event in self._astream_events(None, config, with_intro=False):
             yield event
 
