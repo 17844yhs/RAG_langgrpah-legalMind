@@ -647,6 +647,8 @@ return [
 | 8  | RAGAS 评测怎么做的           | 第四章 4.5           |
 | 9  | 高并发怎么处理               | 第八章               |
 | 10 | 线上最大 bug                 | 第 7.1 或 7.2 节     |
+| 11 | 中断/崩溃后怎么恢复           | 第十四章 14.1        |
+| 12 | 多轮对话状态怎么管理、怎么防跑偏 | 第十四章 14.2/14.3  |
 
 ---
 
@@ -665,6 +667,48 @@ return [
 | Token（完整链路）      | 15,640 / 8 次调用 | PostgreSQL JSONB                    |
 | Token（轻路径）        | 524               | 同上                                |
 | 分层测试               | 88 passed         | `pytest --cov=app`                |
+
+---
+
+## 十四、会话状态与中断恢复（面试新题）
+
+### 14.1 崩溃/断线恢复——协作式中断 vs 故障中断
+
+**核心辨析**：两类中断**共用同一 PostgresSaver checkpoint 存储**，差别只在触发者。
+
+- **协作式中断**（HITL）：`interrupt()` 主动暂停，恢复时 `Command(resume=...)` 注入用户回答
+- **故障中断**（进程崩溃/网络断连）：无新输入，恢复时 `astream_continue` 传 input=None 纯续跑（durable execution）
+
+**判断只用两个字段**：`state.next` 回答"**有没有**没做完的节点"（LangGraph 每 superstep 把下一批节点名写进 checkpoint，跑完为空）；`tasks[0].interrupts` 回答"**为什么**没做完"（HITL 带 payload，故障中断没有）。组合三场景：next 空→无事可做（409）；next 非空+interrupts→HITL 卡片接管；next 非空+无 interrupts→显示「继续生成」按钮。
+
+**代码位置**：[workflow.py `astream_continue`](file:///c:/Users/yhs/Desktop/Legal/RAG_langgrpah-legalMind/backend/app/agents/workflow.py#L487-L497) · [chat.py `/continue` + `/pending` 端点 + `_check_pending`](file:///c:/Users/yhs/Desktop/Legal/RAG_langgrpah-legalMind/backend/app/api/chat.py#L91-L107) · 前端 [stores/chat.js `probePending`](file:///c:/Users/yhs/Desktop/Legal/RAG_langgrpah-legalMind/frontend/src/stores/chat.js)（双探测时机：loadMessages 后=崩溃重启、sendMessage 异常 catch=网络波动）
+
+**恢复正确性四保障（面试加分点）**：
+1. 归属校验先行——`_get_owned_session` 防"读取到别人的任务"
+2. 恢复位置不用自己算——input=None，LangGraph 从最近 checkpoint 的 pending 节点续跑
+3. **恢复粒度=节点边界**——执行到一半的节点整体重跑，token 级续传不存在（诚实说边界）
+4. 幂等两道闸——消息层 add_messages 按 id 去重；落库层 `_finalize_stream` 只在流收尾跑一次
+
+> **话术**："本项目副作用只有只读检索、可重跑的 LLM 生成、流收尾落库（不在图节点内），天然幂等——这是按业务形态裁剪的结果，不是没做幂等设计；如果换成下单/发消息类副作用，就要上 operation_id 幂等键 + planned/succeeded/unknown 三态核对。"
+
+### 14.2 会话状态四分法（信息类型/生命周期口径）
+
+| 类型 | 本项目实现 | 生命周期 |
+| --- | --- | --- |
+| 对话历史 | 滑窗裁剪+增量摘要+寒暄 RemoveMessage 擦除 | 当前会话 |
+| **业务状态** | **案情简报**（party/claim/key_facts/focus，只记用户明确确认的事实） | 当前任务 |
+| **任务状态** | 重试施工单+HITL 追问+反思轮次 | 一次执行 |
+| 长期记忆 | 用户主权 PostgresStore（前端自维护） | 跨会话 |
+
+**LangGraph 边界**：框架管**状态的存取与恢复**（容器/reducer/快照/interrupt/续跑/get_state），不管**状态的语义与纪律**（谁抽取、何时失效、防跑偏、幂等、观测）——后者全是应用层的活。
+
+### 14.3 防跑偏——三道防线自评（诚实版）
+
+1. **结构化锚点** 🟡：简报.claim 每轮注入=锚点常在，但**注入≠核对**，没有节点拿它对照新消息
+2. **进度核对** 🟡：质量门控查内容质量（忠实性/完整性），不查目标推进——忠实检索资料≠没跑偏
+3. **事实来源+版本** 🟡：数字与原话一致+优先级链算来源纪律，无 state_version
+
+**入口对齐有**（意图识别+HITL confirm_intent=开局理解），**逐轮防漂缺 → A8**（core_intent 锚点+新输入四分类+简报版本化，多轮会话才启用——按业务形态裁剪是加分答法）。
 
 ---
 

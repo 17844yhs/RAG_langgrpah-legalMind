@@ -27,7 +27,8 @@
 - **🔍 案例检索** — 语义向量 + BM25 关键词混合检索 + BGE-Reranker 重排序，快速定位相关法律案例
 - **📝 法律文书生成** — 自动生成民事起诉状、答辩状、律师函等专业法律文书
 - **🔄 流式对话** — SSE 实时流式输出 + 分阶段进度时间线（意图识别 → 检索 → 生成 → 质量自检），过程透明可见
-- **📚 多轮对话** — LangGraph Checkpointer（PostgresSaver）持久化对话状态，支持 HITL 中断恢复与上下文延续
+- **📚 多轮对话** — LangGraph Checkpointer（PostgresSaver）持久化对话状态，支持 HITL 中断恢复、崩溃/断线恢复与上下文延续
+- **🧠 长期记忆** — 用户主权跨会话背景记忆（PostgresStore + 前端自维护面板），注入问答上下文实现个性化
 - **🔐 用户认证** — JWT 身份认证，保护用户数据安全
 
 ### 技术亮点
@@ -35,15 +36,16 @@
 - **🤝 Human-in-the-Loop 人机协同** — 三个 HITL 检查点：意图确认（置信度 < 0.8 触发澄清）、多轮信息收集（LLM 判断信息不足时自循环追问，最多 3 轮）、检索质量评估（结果不足时引导用户补充），基于 LangGraph `interrupt` API 实现
 - **🪞 Self-Reflection 质量门控** — 生成-评估-修正循环：回答生成后由评审 LLM 按清单自评（忠实性一票否决 / 针对性 / 可操作性），不通过则带反馈重新生成；草稿不入对话历史，重试额度封顶防循环，评审失败降级放行
 - **💰 Token 用量全链路追踪** — `BaseCallbackHandler` 采集每次 LLM 调用用量 → ContextVar 请求级归集 → SSE `usage` 事件 → PostgreSQL JSONB 落库 → 前端展示"消耗 N tokens（输入/输出/调用次数）"
-- **🧹 Context 管理** — 视图裁剪（字符预算 + 轮次边界对齐）+ 增量摘要压缩（结构化事实提取：金额/期限/法条/时效），checkpoint 全量保留历史，防长对话 Context 爆炸
+- **🧹 Context 管理** — 视图裁剪（字符预算 + 轮次边界对齐）+ 增量摘要压缩（结构化事实提取：金额/期限/法条/时效）+ 记忆压缩三件套（寒暄轮擦除 / 案情简报结构化抽取 / 检索结果写历史前要点化），checkpoint 全量保留历史，防长对话 Context 爆炸
+- **⟳ 崩溃/断线恢复** — durable execution 全链路：`pending` 探测端点（`state.next` + interrupts 区分 HITL/故障中断）+ `/chat/continue` 续跑端点 + 前端「继续生成」恢复入口，恢复粒度=节点边界，消息幂等按 id 去重
 - **🛡️ LLM 容灾链** — 主/备 DeepSeek 双实例 `with_fallbacks`，6 类网络/限流异常显式配全，流式场景自动切换
 - **🛠️ Tool Calling + 参数校验** — `search_cases` Tool 使用 Pydantic Schema 校验（年份范围、案由枚举），LLM 自动提取结构化参数，4 层错误处理架构
 - **🧩 ReAct 检索子图** — 自行封装的 4 节点子图（agent → tools → evaluate → finish），支持自动重试与 HITL 介入
-- **📊 混合检索管线** — BM25 + 向量检索 + RRF（Reciprocal Rank Fusion）融合 + BGE-Reranker-v2-m3 精排
+- **📊 混合检索管线** — BM25（jieba 中文分词）+ 向量检索 + RRF（Reciprocal Rank Fusion）融合 + BGE-Reranker-v2-m3 精排
 - **📐 Structured Output** — `with_structured_output(method="function_calling")` 约束 LLM 输出格式（意图识别 / 元数据抽取 / 质量评审）
 - **🚨 统一错误体系** — RFC 9457 Problem Details 规范（type/title/status/detail/code/traceId），TraceId 纯 ASGI 中间件贯穿请求与日志，SSE 错误走结构化事件不破坏流
 - **📡 LangSmith 全链路追踪** — 覆盖意图识别 → 检索 → 重排 → 生成全链路，LCEL 管道使消息组装/模板渲染步骤可观测
-- **📋 RAGAS 评估体系** — 100 条标注数据集 + RAGAS 4 指标评估（faithfulness / answer_relevancy / context_precision / context_recall）+ 自定义 LLM Judge
+- **📋 RAGAS 评估体系** — 149 条标注数据集 + RAGAS 4 指标评估（faithfulness / answer_relevancy / context_precision / context_recall）+ 自定义 LLM Judge
 
 ## 🏗️ 工作流架构
 

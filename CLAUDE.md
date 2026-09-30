@@ -23,14 +23,16 @@ legal_mind/
 ├── docker-compose.yml        # PostgreSQL + Redis
 ├── backend/
 │   ├── app/
-│   │   ├── api/              # FastAPI 路由（auth, chat, documents, cases）
+│   │   ├── api/              # FastAPI 路由（auth, chat, documents, cases, memory）
 │   │   ├── agents/           # LangGraph Agent 工作流
-│   │   │   ├── workflow.py       # StateGraph 主图编排
+│   │   │   ├── workflow.py       # StateGraph 主图编排（AgentState + 质量门控 + checkpoint）
 │   │   │   ├── intent_agent.py   # 意图识别（Structured Output）
 │   │   │   ├── retrieval_agent.py # ReAct 检索子图（4 节点 + HITL）
-│   │   │   ├── qa_agent.py       # 法律问答
+│   │   │   ├── qa_agent.py       # 法律问答（案情简报抽取 + 历史摘要 + 检索数据区）
 │   │   │   ├── document_agent.py # 文书生成
-│   │   │   └── human_loop.py     # HITL 意图确认节点
+│   │   │   ├── supervisor.py     # 层级 Agent 团队（Supervisor 路由 + Send 并行专家 + Combiner）
+│   │   │   └── human_loop.py     # HITL 中断节点（意图确认 + 多轮追问）
+│   │   ├── cache/            # Redis 缓存（意图/检索缓存，熔断+降级）
 │   │   ├── rag/              # RAG 检索管线
 │   │   │   ├── embeddings.py     # BGE 中文 Embedding
 │   │   │   ├── vector_store.py   # Chroma 向量存储
@@ -38,7 +40,7 @@ legal_mind/
 │   │   │   └── reranker.py       # BGE-Reranker-v2-m3
 │   │   ├── tools/           # LangChain Tool Calling
 │   │   │   └── search_tool.py    # search_cases Tool
-│   │   ├── llm/              # LLM 客户端、提示词模板
+│   │   ├── llm/              # LLM 客户端、提示词模板、checkpoint（AsyncPostgresSaver）、限流（Token Bucket）、用量追踪
 │   │   ├── models/           # Tortoise ORM 数据模型
 │   │   ├── services/         # 业务逻辑层
 │   │   ├── exceptions/       # 统一异常处理（RFC 9457 错误码 + 全局处理器 + traceId 中间件）
@@ -54,7 +56,7 @@ legal_mind/
 │   │   ├── clean_data.py        # 数据清洗
 │   │   └── import_eval_data.py   # 评估数据导入
 │   ├── data/                 # 数据集
-│   ├── test/                 # 测试
+│   ├── tests/                # 分层测试（tests/unit / tests/integration / tests/api）
 │   └── pyproject.toml        # 依赖管理
 ├── frontend/
 │   ├── src/
@@ -77,9 +79,10 @@ legal_mind/
 ### Agent 工作流
 
 ```
-START → intent_recognition → check_intent(HITL) → router
-  ├── qa: retrieval_subgraph → qa_generation → final_output
-  ├── search: retrieval_subgraph → final_output
+START → intent_recognition → check_intent(HITL#1) → info_gathering(自循环追问≤3轮, HITL#2)
+  → router
+  ├── qa/search: domain_supervisor → specialist×N(Send 并行) → combiner
+  │     → retrieval_subgraph → qa_generation → quality_gate(不通过→施工单反馈重试) → final_output
   └── document: document_generation → final_output
 → END
 ```
@@ -139,7 +142,7 @@ pnpm dev
 cd backend && uv run pytest
 
 # 运行单个测试文件
-cd backend && uv run pytest test/test_rag.py -v
+cd backend && uv run pytest tests/api/test_chat_stream.py -v
 
 # 前端 lint
 cd frontend && pnpm lint

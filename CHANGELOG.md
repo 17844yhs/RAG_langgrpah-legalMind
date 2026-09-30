@@ -7,6 +7,18 @@
 
 ## [未发布]
 
+### 新增（2026-09-29/30）
+
+- **🧠 长期记忆（用户主权模式）**：LangGraph PostgresStore（`app/api/memory.py` CRUD + 前端 MemoryManage.vue 面板）——用户主动增删背景信息（法律数据敏感，不做 Agent 自动抽取），按 user_id 命名空间存储，注入 QA 上下文（优先级：当前消息 > 简报 > 摘要 > 用户背景）
+- **⟳ 崩溃/断线恢复「继续生成」（durable execution 接线）**：协作式中断（HITL resume）与故障中断（崩溃/断连）共用同一 checkpoint 存储——后端 `workflow.astream_continue`（input=None 续跑）+ `POST /chat/continue` + `GET /sessions/{id}/pending` 探测（`state.next` 判断有无 pending、`tasks[0].interrupts` 区分 HITL/故障，无 pending 409 `CHAT_002`）；前端 `canContinue` + 双探测时机（加载会话=进程崩溃重启、发送异常=网络波动）+ 恢复按钮；恢复粒度=节点边界，消息幂等靠 add_messages 按 id 去重
+- **🗜️ 记忆压缩三件套**（八股"记忆压缩四法"全维度）：①寒暄轮不入历史（RemoveMessage 按显式消息 id 擦除）②案情简报 CaseBrief 结构化抽取（party/claim/key_facts/focus，首轮生成、免疫窗口裁剪）③检索结果写历史前主动压缩（标题+案号+80 字要点，0 次 LLM）
+- **🧱 上下文工程三件套**（八股 17 章）：①检索证据隔离区（"仅供分析的数据区"+边界声明，防间接提示注入）②上下文优先级链（当前消息>简报>摘要｜当前消息>用户背景）③重试轮结构化施工单（`【自检未通过 · 第 N 轮】`+评审意见+修正要求）
+
+### 修复（2026-09-29/30）
+
+- **🔤 BM25 中文分词修复**：`BM25Retriever.from_documents` 未传 `preprocess_func`（默认空格切词），中文 BM25 路完全失效——接 jieba 统一建库/查询分词（`_bm25_tokenize`），删除旧失效索引并重建；'未签书面劳动合同 二倍工资' 正确命中劳动合同法第八十二条
+- **🧪 CI #29 修复**：长期记忆 `get_store()` 未接入测试基建——API 夹具 stub `init_store`、图测试 stub `get_store`，CI 恢复绿色
+
 ### 测试
 
 - **🧪 服务重启与全链路冒烟（省 token 策略）**：uvicorn 改 `--reload-dir app`（默认监听全目录会被 scripts/ 新文件触发误重启）；检索指标实测 **Hit@5 = 90%、MRR@5 = 0.875**（20 条场景问答子集，免 LLM token）；cases/search 全链路 2.1-2.6s；chat SSE 端到端走通 HITL 中断路径（interrupt 追问 + usage 事件 1,080 tokens/2 次调用，中断时消息不落库符合设计）。评测脚本发现旧 100 条样本 gold 为"整部法律"级 id，随法条粒度升级已失效——评估需分层匹配（smoke_api.py 已实现）
