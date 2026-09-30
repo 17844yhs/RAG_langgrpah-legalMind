@@ -13,6 +13,7 @@ import os
 import pickle
 import logging
 from typing import List, Dict, Optional
+import jieba
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
@@ -21,6 +22,16 @@ from app.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+
+def _bm25_tokenize(text: str) -> List[str]:
+    """BM25 中文分词 — jieba 精确模式
+
+    langchain BM25Retriever 默认按空格切词，中文整篇/整句会变成单个 token，
+    BM25 路彻底失效；文档与查询必须用同一个分词函数（本函数随 retriever
+    一起被 pickle，按模块引用还原，两端天然一致）。
+    """
+    return jieba.lcut(text)
 
 
 def _rrf_fusion(
@@ -96,7 +107,7 @@ class HybridRetriever:
                 for doc, meta in zip(existing.get("documents"), existing.get("metadatas"), strict=True)
             ]
             self.bm25_retriever = BM25Retriever.from_documents(
-                docs, k=settings.RAG_TOP_K * 2
+                docs, k=settings.RAG_TOP_K * 2, preprocess_func=_bm25_tokenize
             )
             logger.info(
                 "BM25 索引已从向量库重建：%d 个文档", len(docs)
