@@ -3,10 +3,11 @@ import json
 import logging
 import operator
 import random
+from uuid import uuid4
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
 from langgraph.types import Command, Send
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, RemoveMessage
 from langgraph.graph.message import add_messages
 
 from app.agents.intent_agent import IntentAgent
@@ -25,6 +26,27 @@ from app.llm.guardrails import check_input_guardrail, find_output_violation, OUT
 from app.config import settings
 
 logger = logging.getLogger("app.workflow")
+
+# 主动压缩案例到对话历史
+def _compress_cases_for_history(cases: list) -> str:
+    """检索结果写回对话历史前的确定性要点压缩（12.x 主动压缩，0 次 LLM）
+
+    案例 JSON 全文只服务本轮展示（response → SSE/落库）；后续轮次需要的是
+    "检索到过哪些判例、什么结论"的索引级要点——整份 JSON 留在历史里，
+    会让之后每轮 prompt 都背着几 KB 的死重。
+    """
+    if not cases:
+        return "（未检索到相关案例）"
+    lines = []
+    for i, c in enumerate(cases, 1):
+        title = c.get("title") or c.get("case_type") or "未命名案例"
+        no = c.get("case_number", "")
+        head = (c.get("summary") or c.get("content") or "").strip()[:80]
+        line = f"{i}. {title}" + (f"（{no}）" if no else "")
+        if head:
+            line += f"：{head}"
+        lines.append(line)
+    return "本轮检索结果要点：\n" + "\n".join(lines)
 
 
 class AgentState(TypedDict):
@@ -57,6 +79,9 @@ class AgentState(TypedDict):
     reflection_passed: bool       # 门控结论（True→放行进 final_output，False→回 qa_generation）
     # ── 长期记忆（14.3 用户主权模式）：用户在前端手动维护的背景资料，请求时按 user_id 现查现注入 ──
     user_memories: list
+    # ── 记忆压缩三件套（12.x 四法对照：滑窗+摘要✅ / 重要性过滤✅ / 结构化抽取✅ / 主动压缩✅）──
+    user_msg_id: str             # 本轮用户消息 id（寒暄轮次从历史擦除时用）
+    case_brief: str              # 案情简报（结构化抽取的事实档案，免疫窗口裁剪）
 
 class LegalMindWorkflow:
     """法律咨询 Agent 工作流"""
@@ -194,10 +219,22 @@ class LegalMindWorkflow:
         # 质量门控重试轮：把上一版的自检反馈注入 prompt，引导针对性修正
         reflection_feedback = state.get("reflection_feedback") or ""
 
+        # ── 案情简报（12.x 结构化抽取）：首次生成前从对话抽事实级档案 ──
+        # 重试轮复用 state 里的结果（一次请求至多 1 次抽取调用）；
+        # 失败降级为空串，prompt 不渲染简报块（裁剪视图+摘要兜底）
+        case_brief = state.get("case_brief") or ""
+        if not case_brief:
+            brief = await self.qa_agent.extract_case_brief(
+                state.get("query", ""), kept, summary
+            )
+            if brief:
+                case_brief = self.qa_agent.render_case_brief(brief)
+
         full_text = ""
         async for chunk in self.qa_agent.stream_answer(
             cases, kept, summary, reflection_feedback=reflection_feedback,
             user_memories=state.get("user_memories") or [],
+            case_brief=case_brief or None,
         ):
             full_text += chunk.content or ""
 
@@ -215,6 +252,8 @@ class LegalMindWorkflow:
             # 持久化到 checkpoint：下轮继续增量摘要，不用重复压缩
             "context_summary": summary,
             "summarized_count": summarized_count,
+            # 简报随 checkpoint 持久化：重试轮/下轮直接复用，不重复抽取
+            "case_brief": case_brief,
         }
 
     async def _quality_gate_node(self, state: AgentState) -> dict:
@@ -289,11 +328,19 @@ class LegalMindWorkflow:
     ]
 
     async def _chitchat_node(self, state: AgentState) -> dict:
-        """问候快速通道：规则模板回复，不走检索/生成/质量门控（智能路由 10.5）"""
+        """问候快速通道：规则模板回复，不走检索/生成/质量门控（智能路由 10.5）
+
+        寒暄轮次不入对话历史（12.x 重要性过滤·规则版）：用 RemoveMessage
+        擦除本轮用户消息、且不写入问候 AI 消息——问候不承载案情事实，
+        留在历史里只是之后每轮 prompt 的纯 token 税。
+        """
         text = random.choice(self._CHITCHAT_REPLIES)
+        remove_user = (
+            [RemoveMessage(id=state["user_msg_id"])] if state.get("user_msg_id") else []
+        )
         return {
             "response": text,
-            "messages": [AIMessage(content=text)],
+            "messages": remove_user,
         }
 
     async def _output_node(self, state: AgentState) -> dict:
@@ -302,7 +349,9 @@ class LegalMindWorkflow:
             # 每层缩进 2 空格，输出带换行和缩进的美化格式
             text = json.dumps(cases, ensure_ascii=False, indent=2)
             return {
-                "messages": [AIMessage(content=text)],
+                # 12.x 主动压缩：案例 JSON 原文只服务本轮（response → SSE/落库），
+                # 写入对话历史的是确定性要点（0 次 LLM），后续轮次不带死重
+                "messages": [AIMessage(content=_compress_cases_for_history(cases))],
                 "response": text,
                 "sources": self.qa_agent.extract_sources(cases),
             }
@@ -388,9 +437,12 @@ class LegalMindWorkflow:
 
     async def run(self, query: str, thread_id: str, user_id: str | None = None) -> dict:
         config = {"configurable": {"thread_id": thread_id}}
+        user_msg_id = f"user-{uuid4().hex}"
         init_state = {
             "query": query,
-            "messages": [HumanMessage(content=query)],
+            # 显式指定消息 id：寒暄轮次需要按 id 从历史中擦除（12.x 重要性过滤）
+            "messages": [HumanMessage(content=query, id=user_msg_id)],
+            "user_msg_id": user_msg_id,
             "user_memories": await self._load_user_memories(user_id),
         }
         result = await self.get_graph().ainvoke(init_state, config=config)
@@ -399,9 +451,12 @@ class LegalMindWorkflow:
     async def astream(self, query: str, thread_id: str, user_id: str | None = None):
         """正常流程：发送新消息，流式返回 token + 阶段进度事件"""
         config = {"configurable": {"thread_id": thread_id}}
+        user_msg_id = f"user-{uuid4().hex}"
         init_state = {
             "query": query,
-            "messages": [HumanMessage(content=query)],
+            # 显式指定消息 id：寒暄轮次需要按 id 从历史中擦除（12.x 重要性过滤）
+            "messages": [HumanMessage(content=query, id=user_msg_id)],
+            "user_msg_id": user_msg_id,
             "user_memories": await self._load_user_memories(user_id),
         }
         async for event in self._astream_events(init_state, config, with_intro=True):

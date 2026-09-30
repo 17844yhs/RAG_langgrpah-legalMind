@@ -10,7 +10,7 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
 from app.config import settings
 from app.llm.model_client import get_llm
-from app.llm.prompts import QA_SYSTEM_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT, REFLECTION_PROMPT
+from app.llm.prompts import QA_SYSTEM_PROMPT, META_EXTRACT_PROMPT, HISTORY_SUMMARIZE_PROMPT, REFLECTION_PROMPT, CASE_BRIEF_PROMPT
 
 logger = logging.getLogger("app.agent")
 
@@ -43,6 +43,19 @@ class ReflectionVerdict(BaseModel):
     )
 
 
+class CaseBrief(BaseModel):
+    """案情简报 — 信息收集完成后从对话中抽取的结构化案情档案（12.x 结构化抽取）。
+
+    免疫窗口裁剪：被裁掉轮次里用户已确认的事实（金额/日期/诉求）以字段形式
+    永久保留，与摘要压缩互补——简报保事实级字段，摘要保对话脉络。
+    """
+    party: str = Field(default="", description="当事人及身份处境")
+    claim: str = Field(default="", description="核心法律诉求")
+    key_facts: str = Field(default="", description="关键事实（证据/金额/已发生节点）")
+    focus: str = Field(default="", description="当前争议焦点")
+    timeline: str = Field(default="", description="重要时间线")
+
+
 class QAAgent:
     """法律问答 Agent：利用大语言模型（LLM）结合检索到的相关法律案例，生成针对用户问题的专业回答。"""
     def __init__(self):
@@ -59,6 +72,12 @@ class QAAgent:
             .with_structured_output(ReflectionVerdict, method="function_calling")
             .with_retry(stop_after_attempt=2)
         )
+        # 案情简报抽取器（12.x 结构化抽取）：结构化输出 + 重试，失败降级为无简报
+        self.brief_llm = (
+            self.llm
+            .with_structured_output(CaseBrief, method="function_calling")
+            .with_retry(stop_after_attempt=2)
+        )
         # ── LCEL 统一管道：一切皆 Runnable，自动获得 ainvoke/astream/batch 能力，
         #    每个中间步骤（消息组装/提示模板）自动进 LangSmith trace ──
         # QA 主链：消息组装 → LLM（输出 AIMessageChunk，保留打字机流式语义）
@@ -67,6 +86,7 @@ class QAAgent:
                 lambda x: self.build_messages(
                     x["cases"], x["messages"], x.get("summary"),
                     x.get("reflection_feedback"), x.get("user_memories"),
+                    x.get("case_brief"),
                 )
             )
             | self.llm
@@ -82,6 +102,13 @@ class QAAgent:
             RunnableLambda(lambda text: META_EXTRACT_PROMPT.format(answer=text[:6000]))
             | self.meta_llm
         )
+        # 案情简报抽取链：对话记录 → 结构化案情档案
+        self.brief_chain = (
+            RunnableLambda(lambda x: CASE_BRIEF_PROMPT.format(
+                history=x["history"], max_chars=x["max_chars"],
+            ))
+            | self.brief_llm
+        )
 
     async def extract_meta(self, answer_text: str) -> Optional[LegalAnswerMeta]:
         """从完整回答文本抽取元数据。失败返回 None（增强功能，不阻塞主流程）。"""
@@ -96,6 +123,48 @@ class QAAgent:
             logger.exception("元数据抽取失败，降级跳过（不影响回答本身）")
             return None
 
+    async def extract_case_brief(self, query: str, messages: List[BaseMessage],
+                                 summary: str | None = None) -> Optional[CaseBrief]:
+        """案情简报抽取（12.x 结构化抽取）：从当前对话抽结构化案情档案。
+
+        在 qa 首次生成前执行一次（重试轮复用 state 里的结果，不重复抽取）。
+        失败返回 None——简报是增强路径，缺失时仅靠裁剪视图+摘要兜底。
+        """
+        history = "\n".join(
+            f"{'用户' if isinstance(m, HumanMessage) else '助手'}: {m.content}"
+            for m in messages
+        )
+        if summary:
+            history = f"【早期对话摘要】\n{summary}\n\n{history}"
+        history = f"当前问题：{query}\n\n{history}"
+        try:
+            result = await self.brief_chain.ainvoke({
+                "history": history[:8000],
+                "max_chars": settings.CASE_BRIEF_MAX_CHARS,
+            })
+            if result is None:  # function_calling 模式拒答返回 None 而非抛异常
+                raise ValueError("structured output returned None")
+            return result
+        except Exception:
+            logger.exception("案情简报抽取失败，降级跳过（不影响回答本身）")
+            return None
+
+    @staticmethod
+    def render_case_brief(brief: CaseBrief) -> str:
+        """CaseBrief → 注入文本（字段级档案，空字段不渲染）"""
+        lines = [
+            f"- {label}：{value}"
+            for label, value in [
+                ("当事人", brief.party),
+                ("核心诉求", brief.claim),
+                ("关键事实", brief.key_facts),
+                ("争议焦点", brief.focus),
+                ("时间线", brief.timeline),
+            ]
+            if value
+        ]
+        return "\n".join(lines)
+
     @staticmethod
     def _format_memories(memories: List[Dict] | None) -> str:
         """把用户手动维护的长期记忆格式化为注入块（14.3 用户主权模式）"""
@@ -104,12 +173,15 @@ class QAAgent:
 
     def build_messages(self, cases: List[Dict], messages: List[BaseMessage],
                        summary: str | None = None, reflection_feedback: str | None = None,
-                       user_memories: List[Dict] | None = None) -> List[BaseMessage]:
-        """组装 LLM 输入消息：system（人设 + 案例上下文）+ [历史摘要] + [质量修正反馈] + 对话历史视图。
+                       user_memories: List[Dict] | None = None,
+                       case_brief: str | None = None) -> List[BaseMessage]:
+        """组装 LLM 输入消息：system（人设 + 案例上下文）+ [案情简报] + [用户背景] + [历史摘要] + [质量修正反馈] + 对话历史视图。
 
         - 案例作为当轮 system 注入，绝不进入长期累积的 messages
         - messages 应是裁剪后的视图（context_manager.split_history 的 kept），
           checkpoint 里的全量历史不受影响
+        - case_brief：案情简报（12.x 结构化抽取），事实级档案注入 system，
+          免疫窗口裁剪——被裁轮次里已确认的事实在这里永久保留
         - summary：被裁掉的最老轮次的压缩摘要，注入在 system 之后、原文之前
         - reflection_feedback：质量门控不通过时的修正反馈（重试轮注入，引导针对性修改）
         - user_memories：用户手动维护的跨会话背景（长期记忆），拼进 system 人设块
@@ -119,6 +191,12 @@ class QAAgent:
             + "\n\n## 检索参考（案例与法条）\n"
             + self._format_cases(cases)
         )
+        if case_brief:
+            system_content += (
+                "\n\n## 案情简报（从对话中抽取的已确认事实档案）\n"
+                f"{case_brief}\n"
+                "回答以本简报为事实基准；若简报与早期摘要冲突，以简报为准。"
+            )
         background = self._format_memories(user_memories)
         if background:
             system_content += (
@@ -184,11 +262,13 @@ class QAAgent:
 
     async def answer(self, cases: List[Dict], messages: List[BaseMessage] | None = None,
                      summary: str | None = None, reflection_feedback: str | None = None,
-                     user_memories: List[Dict] | None = None) -> dict:
+                     user_memories: List[Dict] | None = None,
+                     case_brief: str | None = None) -> dict:
         """非流式问答（脚本/调试用，主链路走 stream_answer）"""
         response = await self.qa_chain.ainvoke(
             {"cases": cases, "messages": messages or [], "summary": summary,
-             "reflection_feedback": reflection_feedback, "user_memories": user_memories}
+             "reflection_feedback": reflection_feedback, "user_memories": user_memories,
+             "case_brief": case_brief}
         )
 
         sources = self.extract_sources(cases)
@@ -197,11 +277,13 @@ class QAAgent:
 
     async def stream_answer(self, cases: List[Dict], messages: List[BaseMessage] | None = None,
                             summary: str | None = None, reflection_feedback: str | None = None,
-                            user_memories: List[Dict] | None = None):
+                            user_memories: List[Dict] | None = None,
+                            case_brief: str | None = None):
         """流式问答：逐 token 产出 AIMessageChunk（打字机效果的主链路）"""
         async for chunk in self.qa_chain.astream(
             {"cases": cases, "messages": messages or [], "summary": summary,
-             "reflection_feedback": reflection_feedback, "user_memories": user_memories}
+             "reflection_feedback": reflection_feedback, "user_memories": user_memories,
+             "case_brief": case_brief}
         ):
             yield chunk
     

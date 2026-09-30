@@ -40,7 +40,8 @@ def workflow():
 
 
 def make_stream_stub(answers: list[str], calls: list):
-    async def stream_answer(cases, messages, summary=None, reflection_feedback=None):
+    async def stream_answer(cases, messages, summary=None, reflection_feedback=None,
+                            user_memories=None, case_brief=None):
         calls.append({"reflection_feedback": reflection_feedback})
         text = answers[min(len(calls) - 1, len(answers) - 1)]
         yield AIMessageChunk(content=text)
@@ -76,6 +77,11 @@ def patch_common(monkeypatch, workflow, *, intent="qa", confidence=0.95):
     async def extract_meta(text):
         return None
     monkeypatch.setattr(workflow.qa_agent, "extract_meta", extract_meta)
+
+    # 案情简报（12.x 结构化抽取）：stub 返回 None = 不注入简报块
+    async def extract_case_brief(query, messages, summary=None):
+        return None
+    monkeypatch.setattr(workflow.qa_agent, "extract_case_brief", extract_case_brief)
 
     monkeypatch.setattr(workflow.qa_agent, "extract_sources", lambda cases: ["来源1"])
 

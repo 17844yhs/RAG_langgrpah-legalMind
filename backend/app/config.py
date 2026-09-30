@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     HISTORY_CHAR_BUDGET: int = 6000    # 历史视图预算（字符，≈3-4k token，超了才裁）
     SUMMARY_TRIGGER_CHARS: int = 2000  # 落入裁剪区的未摘要内容超过此字符数才触发摘要 LLM
     SUMMARY_MAX_CHARS: int = 400       # 摘要长度上限（提示词约束，控制摘要自身的 token 开销）
+    CASE_BRIEF_MAX_CHARS: int = 500    # 案情简报长度上限（12.x 结构化抽取，注入 prompt 的事实级档案）
 
     # Self-Reflection 质量门控（生成-评估-修正循环，见 workflow.quality_gate 节点）
     REFLECTION_ENABLED: bool = True    # 总开关（关闭则 qa_generation 直通 final_output）
