@@ -68,6 +68,9 @@ async def client(pg_available, monkeypatch):
         return None
     monkeypatch.setattr(main_mod, "init_vector_store", _noop)
     monkeypatch.setattr(main_mod, "init_checkpointer", _noop)
+    # 长期记忆 Store（14.3）依赖 checkpointer 连接池，同步跳过——
+    # lifespan 里 init_store() 在池未初始化时会抛 RuntimeError
+    monkeypatch.setattr(main_mod, "init_store", _noop)
     # 预热会加载 cross-encoder 并做真实推理（秒级~30s），函数级夹具逐测试触发
     # lifespan，不跳过会让每个 API 测试都白付一次模型加载
     monkeypatch.setattr(main_mod, "_prewarm_retrieval", _noop)

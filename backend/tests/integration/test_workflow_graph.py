@@ -55,8 +55,11 @@ def make_reflect_stub(verdicts: list, calls: list):
 
 
 def patch_common(monkeypatch, workflow, *, intent="qa", confidence=0.95):
-    """公共桩：checkpointer + 检索子图 + 信息收集 + 意图识别"""
+    """公共桩：checkpointer + store + 检索子图 + 信息收集 + 意图识别"""
     monkeypatch.setattr(wf, "get_checkpointer", lambda: MemorySaver())
+    # 长期记忆 Store（14.3）：编译参数传 None 即可（LangGraph store 可选），
+    # _load_user_memories 对 None/未初始化自带 try/except 降级空列表
+    monkeypatch.setattr(wf, "get_store", lambda: None)
 
     async def fake_retrieval(state):
         return {"retrieved_cases": [dict(FAKE_CASE)]}
