@@ -137,7 +137,8 @@ async def test_gate_retry_injects_feedback_and_draft_not_in_history(monkeypatch,
     # 重试发生且反馈被注入到第二流的 prompt
     assert len(stream_calls) == 2
     assert stream_calls[0]["reflection_feedback"] == ""
-    assert stream_calls[1]["reflection_feedback"] == "回答编造了法条条文"
+    # 17.x 结构化修正指引：原始意见被包进"轮次+评分+意见+要求"的施工单
+    assert "回答编造了法条条文" in stream_calls[1]["reflection_feedback"]
     # 最终响应是修正版
     assert result["response"] == "修正v2"
     assert result["reflection_round"] == 1

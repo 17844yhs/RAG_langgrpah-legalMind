@@ -272,7 +272,12 @@ class LegalMindWorkflow:
             if round_used < settings.REFLECTION_MAX_ROUNDS:
                 logger.info("输出护栏命中（%s），注入反馈重试", violation)
                 return {
-                    "reflection_feedback": f"输出安全校验未通过：{violation}，请重新生成合规回答",
+                    # 17.x 结构化修正指引：轮次+问题类型+修正要求，让重试轮拿到"施工单"
+                    "reflection_feedback": (
+                        f"【自检未通过 · 第 {round_used + 1} 轮】\n"
+                        f"问题类型：输出安全校验未通过（{violation}）\n"
+                        "修正要求：重新生成合规回答，不得包含上述违规内容。"
+                    ),
                     "reflection_round": round_used + 1,
                 }
             # 重试额度用尽：违规内容不放行，替换为兜底话术
@@ -294,8 +299,15 @@ class LegalMindWorkflow:
 
         if not verdict.passed and round_used < settings.REFLECTION_MAX_ROUNDS:
             logger.info("质量自检未通过(score=%.2f)，注入反馈重试：%s", verdict.score, verdict.feedback[:80])
+            # 17.x 结构化修正指引：轮次+评分+意见+要求——模型拿到的不是裸意见，
+            # 而是明确"错在哪、改什么、边界在哪"的施工单（任务状态渲染给 LLM）
             return {
-                "reflection_feedback": verdict.feedback,
+                "reflection_feedback": (
+                    f"【自检未通过 · 第 {round_used + 1} 轮 · 综合分 {verdict.score:.2f}】\n"
+                    f"评审意见：{verdict.feedback}\n"
+                    "修正要求：逐条修正上述问题；引用的法条/案号必须出自检索参考，"
+                    "不得复述上一版的错误依据。"
+                ),
                 "reflection_round": round_used + 1,
             }
 
