@@ -65,7 +65,8 @@ class QAAgent:
         self.qa_chain = (
             RunnableLambda(
                 lambda x: self.build_messages(
-                    x["cases"], x["messages"], x.get("summary"), x.get("reflection_feedback")
+                    x["cases"], x["messages"], x.get("summary"),
+                    x.get("reflection_feedback"), x.get("user_memories"),
                 )
             )
             | self.llm
@@ -95,8 +96,15 @@ class QAAgent:
             logger.exception("元数据抽取失败，降级跳过（不影响回答本身）")
             return None
 
+    @staticmethod
+    def _format_memories(memories: List[Dict] | None) -> str:
+        """把用户手动维护的长期记忆格式化为注入块（14.3 用户主权模式）"""
+        lines = [f"- {m['content']}" for m in (memories or []) if m.get("content")]
+        return "\n".join(lines)
+
     def build_messages(self, cases: List[Dict], messages: List[BaseMessage],
-                       summary: str | None = None, reflection_feedback: str | None = None) -> List[BaseMessage]:
+                       summary: str | None = None, reflection_feedback: str | None = None,
+                       user_memories: List[Dict] | None = None) -> List[BaseMessage]:
         """组装 LLM 输入消息：system（人设 + 案例上下文）+ [历史摘要] + [质量修正反馈] + 对话历史视图。
 
         - 案例作为当轮 system 注入，绝不进入长期累积的 messages
@@ -104,12 +112,20 @@ class QAAgent:
           checkpoint 里的全量历史不受影响
         - summary：被裁掉的最老轮次的压缩摘要，注入在 system 之后、原文之前
         - reflection_feedback：质量门控不通过时的修正反馈（重试轮注入，引导针对性修改）
+        - user_memories：用户手动维护的跨会话背景（长期记忆），拼进 system 人设块
         """
         system_content = (
             QA_SYSTEM_PROMPT
             + "\n\n## 检索参考（案例与法条）\n"
             + self._format_cases(cases)
         )
+        background = self._format_memories(user_memories)
+        if background:
+            system_content += (
+                "\n\n## 用户背景（用户主动提供的长期信息，跨会话有效）\n"
+                f"{background}\n"
+                "回答时主动利用这些背景，不要向用户重复询问其中已明确的事实。"
+            )
         msgs: List[BaseMessage] = [SystemMessage(content=system_content)]
         if summary:
             msgs.append(SystemMessage(content=f"## 早期对话摘要（由系统自动压缩）\n{summary}"))
@@ -167,11 +183,12 @@ class QAAgent:
             return prev_summary or ""
 
     async def answer(self, cases: List[Dict], messages: List[BaseMessage] | None = None,
-                     summary: str | None = None, reflection_feedback: str | None = None) -> dict:
+                     summary: str | None = None, reflection_feedback: str | None = None,
+                     user_memories: List[Dict] | None = None) -> dict:
         """非流式问答（脚本/调试用，主链路走 stream_answer）"""
         response = await self.qa_chain.ainvoke(
             {"cases": cases, "messages": messages or [], "summary": summary,
-             "reflection_feedback": reflection_feedback}
+             "reflection_feedback": reflection_feedback, "user_memories": user_memories}
         )
 
         sources = self.extract_sources(cases)
@@ -179,11 +196,12 @@ class QAAgent:
         return {"answer": response, "sources": sources}
 
     async def stream_answer(self, cases: List[Dict], messages: List[BaseMessage] | None = None,
-                            summary: str | None = None, reflection_feedback: str | None = None):
+                            summary: str | None = None, reflection_feedback: str | None = None,
+                            user_memories: List[Dict] | None = None):
         """流式问答：逐 token 产出 AIMessageChunk（打字机效果的主链路）"""
         async for chunk in self.qa_chain.astream(
             {"cases": cases, "messages": messages or [], "summary": summary,
-             "reflection_feedback": reflection_feedback}
+             "reflection_feedback": reflection_feedback, "user_memories": user_memories}
         ):
             yield chunk
     

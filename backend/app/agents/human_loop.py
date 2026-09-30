@@ -91,12 +91,19 @@ async def info_gathering(state):
     # 摘要在前（早期轮次）、原文在后（近期轮次），与 qa 侧的注入顺序一致
     kept, _ = split_history(state.get("messages", []))
     history = format_history_text(kept, state.get("context_summary") or "")
+    # 用户手动维护的长期记忆（14.3）：已明确的背景事实不再追问
+    background = "\n".join(
+        f"- {m['content']}"
+        for m in (state.get("user_memories") or [])
+        if m.get("content")
+    ) or "无"
 
     try:
         result = await llm.ainvoke(INFO_GATHERING_PROMPT.format(
             intent=state.get("intent", "qa"),
             query=state.get("query", ""),
             history=history,
+            background=background,
         ))
         # function_calling 模式下模型拒答会返回 None 而非抛异常
         if result is None:

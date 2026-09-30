@@ -119,7 +119,7 @@ async def send_message(request: ChatRequest, user: User = Depends(get_current_us
     """发送消息（非流式）"""
     session_id = request.session_id or str(uuid.uuid4())
     session = await _ensure_session(session_id, user)
-    result = await workflow.run(query=request.message, thread_id=session_id)
+    result = await workflow.run(query=request.message, thread_id=session_id, user_id=str(user.id))
 
     # 与流式路径一致：token 消耗随消息持久化（流式在 _finalize_stream，非流式在此）
     req_usage = usage_var.get()
@@ -151,7 +151,7 @@ async def stream_message(request: ChatRequest, user: User = Depends(get_current_
             # 先发 session_id，前端新会话需要用它来 resume
             yield f"data: {json.dumps({'session_id': session_id}, ensure_ascii=False)}\n\n"
 
-            async for event in workflow.astream(query=query, thread_id=session_id):
+            async for event in workflow.astream(query=query, thread_id=session_id, user_id=str(user.id)):
                 if event["type"] == "stage":
                     stage = event["stage"]
                     # 质量自检重试：第一版草稿作废，复位 API 侧缓冲并通知前端清空气泡

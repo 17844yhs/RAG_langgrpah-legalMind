@@ -41,7 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import init_db,close_db
 from app.rag.vector_store import init_vector_store
-from app.llm.checkpoint import init_checkpointer,close_checkpointer
+from app.llm.checkpoint import init_checkpointer, close_checkpointer, init_store
 from app.cache.redis_cache import ping_cache, close_cache
 from app.exceptions.handlers import register_exception_handlers, TraceIdMiddleware
 
@@ -83,6 +83,8 @@ async def lifespan(app:FastAPI):
     await init_db()
     await init_vector_store()
     await init_checkpointer()
+    # 长期记忆 Store：复用 checkpointer 连接池，幂等建表（14.3 用户主权模式）
+    await init_store()
     # 缓存探测仅做观测日志：不可达时缓存层自动熔断降级，业务零感知
     if await ping_cache():
         logger.info("Redis 缓存已连接（意图/检索缓存生效）")
@@ -116,7 +118,7 @@ register_exception_handlers(app)
 # traceId 中间件：每个请求生成/透传排查 ID，响应头与错误体都会携带
 app.add_middleware(TraceIdMiddleware)
 
-from app.api import auth, chat, documents, cases
+from app.api import auth, chat, documents, cases, memory
 
 # API 版本化前缀：未来不兼容变更可并存 /api/v2，旧客户端不受影响
 API_V1_PREFIX = "/api/v1"
@@ -124,6 +126,7 @@ app.include_router(auth.router, prefix=f"{API_V1_PREFIX}/auth", tags=["认证"])
 app.include_router(chat.router, prefix=f"{API_V1_PREFIX}/chat", tags=["聊天"])
 app.include_router(documents.router, prefix=f"{API_V1_PREFIX}/documents", tags=["文书"])
 app.include_router(cases.router, prefix=f"{API_V1_PREFIX}/cases", tags=["案例"])
+app.include_router(memory.router, prefix=f"{API_V1_PREFIX}/memory", tags=["长期记忆"])
 
 
 @app.get("/health")

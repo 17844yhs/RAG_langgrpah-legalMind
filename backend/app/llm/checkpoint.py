@@ -7,11 +7,13 @@
 
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from app.config import settings
 
 _pool: AsyncConnectionPool | None = None
 _checkpointer: AsyncPostgresSaver | None = None
+_store: AsyncPostgresStore | None = None
 
 async def init_checkpointer() -> AsyncPostgresSaver:
     """初始化 checkpointer：创建连接池 + 幂等建表。在 lifespan startup 调用。"""
@@ -46,6 +48,33 @@ def get_checkpointer() -> AsyncPostgresSaver:
             "Checkpointer 尚未初始化，请在应用启动时调用 init_checkpointer()"
         )
     return _checkpointer
+
+
+async def init_store() -> AsyncPostgresStore:
+    """初始化 LangGraph Store（跨会话长期记忆，14.3 用户主权模式）。
+
+    - 复用 checkpointer 连接池（同一套 PostgreSQL），必须在 init_checkpointer 之后调用
+    - setup() 幂等建表（store 表与 checkpoint 表共存一个库）
+    - 记忆条目由用户在前端手动维护（非 agent 自动抽取）：
+      法律场景 agent 记错事实的代价高于记不住，授权与准确性都由用户背书
+    """
+    global _store
+    if _store is not None:
+        return _store
+    if _pool is None:
+        raise RuntimeError("连接池未初始化：请先调用 init_checkpointer()")
+    _store = AsyncPostgresStore(conn=_pool)
+    await _store.setup()
+    return _store
+
+
+def get_store() -> AsyncPostgresStore:
+    """获取 store 单例：图编译（compile(store=...)）与 /api/memory CRUD 共用。"""
+    if _store is None:
+        raise RuntimeError(
+            "Store 尚未初始化，请在应用启动时调用 init_store()"
+        )
+    return _store
 
 async def close_checkpointer() -> None:
     """关闭连接池。在 lifespan shutdown 调用。"""

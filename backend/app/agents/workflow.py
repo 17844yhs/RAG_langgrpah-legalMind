@@ -19,7 +19,7 @@ from app.agents.supervisor import (
     combiner_node,
 )
 from app.agents.human_loop import check_intent, info_gathering
-from app.llm.checkpoint import get_checkpointer
+from app.llm.checkpoint import get_checkpointer, get_store
 from app.llm.context_manager import split_history, estimate_chars
 from app.llm.guardrails import check_input_guardrail, find_output_violation, OUTPUT_FALLBACK
 from app.config import settings
@@ -55,6 +55,8 @@ class AgentState(TypedDict):
     reflection_feedback: str      # 质量自检不通过时的修正反馈（重试轮注入 prompt）
     reflection_round: int         # 已重试轮数（防无限循环，上限 REFLECTION_MAX_ROUNDS）
     reflection_passed: bool       # 门控结论（True→放行进 final_output，False→回 qa_generation）
+    # ── 长期记忆（14.3 用户主权模式）：用户在前端手动维护的背景资料，请求时按 user_id 现查现注入 ──
+    user_memories: list
 
 class LegalMindWorkflow:
     """法律咨询 Agent 工作流"""
@@ -142,7 +144,7 @@ class LegalMindWorkflow:
         workflow.add_edge("chitchat_reply", "final_output")
         workflow.add_edge("final_output", END)
 
-        return workflow.compile(checkpointer=get_checkpointer())
+        return workflow.compile(checkpointer=get_checkpointer(), store=get_store())
 
     #  节点函数 
     async def _intent_node(self, state: AgentState) -> dict:
@@ -194,7 +196,8 @@ class LegalMindWorkflow:
 
         full_text = ""
         async for chunk in self.qa_agent.stream_answer(
-            cases, kept, summary, reflection_feedback=reflection_feedback
+            cases, kept, summary, reflection_feedback=reflection_feedback,
+            user_memories=state.get("user_memories") or [],
         ):
             full_text += chunk.content or ""
 
@@ -364,22 +367,42 @@ class LegalMindWorkflow:
             self._graph = self._build_graph()
         return self._graph
 
-    #  执行入口 
-    async def run(self, query: str, thread_id: str) -> dict:
+    #  执行入口
+    async def _load_user_memories(self, user_id: str | None) -> list[dict]:
+        """加载用户手动维护的长期记忆（14.3 用户主权模式）。
+
+        - 每次请求现查现注入（不进 checkpoint）：记忆量小（用户手写 ≤20 条），
+          查询成本可忽略，且免去失效/刷新管理
+        - 加载失败降级为空列表（记忆是增强，不是关键路径）
+        """
+        if not user_id:
+            return []
+        try:
+            items = await get_store().asearch(
+                ("memories", user_id), limit=settings.USER_MEMORY_MAX_COUNT
+            )
+            return [item.value for item in items if item.value.get("content")]
+        except Exception:
+            logger.warning("用户长期记忆加载失败，本次不注入背景", exc_info=True)
+            return []
+
+    async def run(self, query: str, thread_id: str, user_id: str | None = None) -> dict:
         config = {"configurable": {"thread_id": thread_id}}
         init_state = {
             "query": query,
             "messages": [HumanMessage(content=query)],
+            "user_memories": await self._load_user_memories(user_id),
         }
         result = await self.get_graph().ainvoke(init_state, config=config)
         return result
 
-    async def astream(self, query: str, thread_id: str):
+    async def astream(self, query: str, thread_id: str, user_id: str | None = None):
         """正常流程：发送新消息，流式返回 token + 阶段进度事件"""
         config = {"configurable": {"thread_id": thread_id}}
         init_state = {
             "query": query,
             "messages": [HumanMessage(content=query)],
+            "user_memories": await self._load_user_memories(user_id),
         }
         async for event in self._astream_events(init_state, config, with_intro=True):
             yield event

@@ -30,6 +30,7 @@ watch(() => route.fullPath, () => { mobileMenuOpen.value = false })
           <router-link to="/chat" class="nav-link no-underline text-sm px-3 py-1.5 rounded-md">法律咨询</router-link>
           <router-link to="/documents" class="nav-link no-underline text-sm px-3 py-1.5 rounded-md">文书生成</router-link>
           <router-link to="/cases" class="nav-link no-underline text-sm px-3 py-1.5 rounded-md">案例检索</router-link>
+          <router-link to="/memory" class="nav-link no-underline text-sm px-3 py-1.5 rounded-md">我的背景</router-link>
         </nav>
 
         <div class="flex items-center gap-3">
@@ -58,6 +59,7 @@ watch(() => route.fullPath, () => { mobileMenuOpen.value = false })
         <router-link to="/chat" class="nav-link block px-4 py-3 text-sm no-underline">法律咨询</router-link>
         <router-link to="/documents" class="nav-link block px-4 py-3 text-sm no-underline">文书生成</router-link>
         <router-link to="/cases" class="nav-link block px-4 py-3 text-sm no-underline">案例检索</router-link>
+        <router-link to="/memory" class="nav-link block px-4 py-3 text-sm no-underline">我的背景</router-link>
       </div>
     </header>
 

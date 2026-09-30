@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "secret-key"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    # 长期记忆（14.3 用户主权模式）：用户在前端手动维护背景资料，非 agent 自动抽取。
+    # 条数/单条长度上限防滥用；注入按 user_id 现查现用（不进 checkpoint，防 state 膨胀）
+    USER_MEMORY_MAX_COUNT: int = 20
+    USER_MEMORY_MAX_CHARS: int = 500
+
     @model_validator(mode="after")
     def _security_sentinel(self):
         """安全哨兵：生产环境（DEBUG=False）默认 JWT 密钥直接拒绝启动。

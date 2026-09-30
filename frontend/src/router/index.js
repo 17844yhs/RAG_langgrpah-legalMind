@@ -39,6 +39,12 @@ const routes = [
     name: 'Cases',
     component: () => import('../views/CaseSearch.vue'),
   },
+  {
+    path: '/memory',
+    name: 'Memory',
+    component: () => import('../views/MemoryManage.vue'),
+    meta: { requiresAuth: true },
+  },
 ]
 
 const router = createRouter({

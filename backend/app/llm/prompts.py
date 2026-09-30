@@ -104,12 +104,16 @@ DOMAIN_SEARCH_HINTS = {
 
 
 # 信息收集充分性判断 + 追问生成 Prompt
+# background：用户手动维护的长期记忆（14.3 用户主权模式），避免重复追问已知事实
 INFO_GATHERING_PROMPT = """你是一个法律咨询信息收集专家。
 
 用户意图：{intent}
 用户问题：{query}
 对话历史：
 {history}
+
+用户主动提供的背景信息（可能为空）：
+{background}
 
 请判断当前是否已有足够的信息来回答用户问题或完成用户请求。
 
@@ -119,6 +123,7 @@ INFO_GATHERING_PROMPT = """你是一个法律咨询信息收集专家。
 - 用户的具体诉求或期望
 
 判断规则：
+- 用户背景中已明确的事实视为已知，不要追问其中已回答的内容
 - 如果用户问题清晰、信息完整，设 sufficient=true
 - 如果信息不足，设 sufficient=false，并在 question 中生成一个针对性的追问
 - 每次只问一个最关键的问题，不要重复已问过的
