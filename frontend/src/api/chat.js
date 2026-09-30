@@ -129,3 +129,41 @@ export function streamResumeMessage(sessionId, userResponse) {
 
   return { abort: () => controller.abort(), stream: wrappedGenerate() }
 }
+
+/**
+ * 探测会话是否有待恢复的图执行（崩溃恢复 / 网络波动恢复）
+ * GET /api/v1/chat/sessions/{sessionId}/pending
+ * @returns {Promise<{pending: boolean, interrupted: boolean}>}
+ * pending=true + interrupted=false → 显示「继续生成」按钮（故障中断）
+ * pending=true + interrupted=true  → HITL 问答卡片（现有机制）
+ */
+export async function checkPending(sessionId) {
+  const { data } = await client.get(`/chat/sessions/${sessionId}/pending`)
+  return data
+}
+
+/**
+ * 崩溃/断线恢复：从 checkpoint 续跑 pending 节点（无新输入）
+ * POST /api/v1/chat/continue — 返回 SSE 流（可能停在新的 interrupt）
+ */
+export function streamContinueMessage(sessionId) {
+  const controller = new AbortController()
+
+  const response = fetch('/api/v1/chat/continue', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${localStorage.getItem('token')}`,
+    },
+    body: JSON.stringify({ session_id: sessionId }),
+    signal: controller.signal,
+  })
+
+  async function* wrappedGenerate() {
+    const res = await response
+    const parsed = parseSSEStream(res, controller)
+    yield* parsed.stream
+  }
+
+  return { abort: () => controller.abort(), stream: wrappedGenerate() }
+}

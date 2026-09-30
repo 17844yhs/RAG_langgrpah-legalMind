@@ -24,6 +24,7 @@ class ErrorCode(str, Enum):
 
     # ── 聊天（CHAT）──
     CHAT_SESSION_NOT_FOUND = "CHAT_001"
+    CHAT_NOT_PENDING = "CHAT_002"   # 会话没有待恢复的图执行（next 为空），continue 无意义
 
     # ── 案例（CASE）──
     CASE_NOT_FOUND = "CASE_001"
@@ -43,6 +44,7 @@ _CODE_META: dict[ErrorCode, tuple[int, str]] = {
     ErrorCode.AUTH_USERNAME_TAKEN: (400, "用户名已注册"),
     ErrorCode.AUTH_EMAIL_TAKEN: (400, "邮箱已注册"),
     ErrorCode.CHAT_SESSION_NOT_FOUND: (404, "会话不存在"),
+    ErrorCode.CHAT_NOT_PENDING: (409, "当前会话没有待恢复的任务"),
     ErrorCode.CASE_NOT_FOUND: (404, "没有找到这个案例"),
     ErrorCode.RAG_RETRIEVAL_FAILED: (500, "检索服务暂时不可用"),
 }

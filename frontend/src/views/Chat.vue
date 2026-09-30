@@ -76,6 +76,17 @@ watch(
         </div>
       </div>
 
+      <!-- 崩溃/断线恢复：检测到待续跑的图执行时显示（durable execution 恢复入口） -->
+      <div v-if="chat.canContinue && !chat.isStreaming && !chat.pendingInterrupt" class="flex justify-center py-2">
+        <button
+          @click="chat.continueGeneration()"
+          class="px-4 py-2 rounded-full text-sm shadow-md transition hover:opacity-90 cursor-pointer"
+          :style="{ backgroundColor: 'var(--primary)', color: '#fff' }"
+        >
+          ⟳ 继续生成（上次回答因中断未完成）
+        </button>
+      </div>
+
       <!-- Human-in-the-Loop 交互卡片（被 interrupt 打断时显示） -->
       <InterruptCard />
 

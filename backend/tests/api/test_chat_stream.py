@@ -14,12 +14,18 @@ from tests.api.conftest import parse_sse
 
 
 class FakeGraph:
-    """aget_state 的假图：_finalize_stream 从这里读 sources/meta/兜底"""
-    def __init__(self, values):
+    """aget_state 的假图：_finalize_stream/_check_pending/_check_interrupt 从这里读 state
+
+    next/interrupts 可在测试中途中改（fake._graph._next = (...)）模拟崩溃后 pending
+    """
+    def __init__(self, values, next=(), interrupts=None):
         self._values = values
+        self._next = next
+        self._interrupts = interrupts or []
 
     async def aget_state(self, config):
-        return SimpleNamespace(values=self._values, next=(), tasks=[])
+        task = SimpleNamespace(interrupts=self._interrupts)
+        return SimpleNamespace(values=self._values, next=self._next, tasks=[task])
 
 
 class FakeWorkflow:
@@ -31,6 +37,15 @@ class FakeWorkflow:
         self._usage = usage
 
     async def astream(self, query, thread_id, **kw):
+        if self._usage:
+            ledger = usage_var.get()
+            if ledger:
+                ledger.add(*self._usage)
+        for e in self._events:
+            yield e
+
+    async def astream_continue(self, thread_id, **kw):
+        """崩溃恢复续跑：无新输入，事件流与 astream 同构（测试共用 _events）"""
         if self._usage:
             ledger = usage_var.get()
             if ledger:
@@ -149,3 +164,83 @@ async def test_stream_unexpected_error_masks_detail(client, auth_headers, monkey
     err = events[-2]["error"]
     assert err["code"] == "SYS_001"
     assert "secret" not in resp.text          # 敏感信息不出内网日志
+
+
+# ── 崩溃/断线恢复（durable execution）：pending 探测 + /continue 续跑 ──
+
+async def _create_session(client, auth_headers, monkeypatch, final_values=None, usage=None):
+    """先走一次 stream 建会话（归属校验需要库里有这条 session），返回 (fake, session_id)。
+
+    建会话用空事件流（无 token → full_text 空 → 不落库），这样 continue 的
+    落库断言才能干净地数出且仅数出续跑轮次的 user/assistant 两条；
+    usage 也延后到 continue 阶段注入，避免建会话轮次先把 token 记掉。
+    """
+    fake = _patch(monkeypatch, events=[], final_values=final_values)
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers,
+                             json={"message": "工伤赔偿怎么计算"})
+    sid = parse_sse(resp.text)[0]["session_id"]
+    fake._events = _fake_events()
+    fake._usage = usage
+    return fake, sid
+
+
+async def test_pending_endpoint_reports_crash_recovery(client, auth_headers, monkeypatch):
+    """探测端点：next 非空且无 interrupt → 故障中断（前端显示「继续生成」按钮）"""
+    fake, sid = await _create_session(client, auth_headers, monkeypatch)
+    fake._graph._next = ("qa_generation",)    # 模拟崩溃后图停在节点边界
+
+    resp = await client.get(f"/api/v1/chat/sessions/{sid}/pending", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"pending": True, "interrupted": False}
+
+
+async def test_pending_endpoint_reports_hitl_interrupt(client, auth_headers, monkeypatch):
+    """探测端点：next 非空 + 有 interrupt → HITL 场景（问答卡片接管，不显示继续按钮）"""
+    fake, sid = await _create_session(client, auth_headers, monkeypatch)
+    fake._graph._next = ("check_intent",)
+    fake._graph._interrupts = [SimpleNamespace(value={"type": "confirm_intent"})]
+
+    resp = await client.get(f"/api/v1/chat/sessions/{sid}/pending", headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"pending": True, "interrupted": True}
+
+
+async def test_continue_streams_and_persists(client, auth_headers, monkeypatch):
+    """/continue：input=None 续跑产出 SSE 流，收尾以 checkpoint state 里的 query 落库"""
+    fake, sid = await _create_session(
+        client, auth_headers, monkeypatch,
+        final_values={"query": "工伤赔偿怎么计算", "sources": ["来源1"], "answer_meta": None},
+        usage=(60, 40),
+    )
+    fake._graph._next = ("qa_generation",)    # 崩溃 pending
+
+    resp = await client.post("/api/v1/chat/continue", headers=auth_headers,
+                             json={"session_id": sid})
+
+    assert resp.status_code == 200
+    events = parse_sse(resp.text)
+    assert [e["content"] for e in events if "content" in e] == ["你好，", "根据劳动合同法"]
+
+    # 落库：query 取自 checkpoint state（本请求无新输入），两条消息补齐
+    records = await ChatMessageRecord.filter(chat_session__session_id=sid).order_by("id")
+    assert [r.role for r in records] == ["user", "assistant"]
+    assert records[0].content == "工伤赔偿怎么计算"
+    assert records[1].content == "你好，根据劳动合同法"
+    assert records[1].usage == {"input_tokens": 60, "output_tokens": 40,
+                                "total_tokens": 100, "calls": 1}
+
+
+async def test_continue_409_when_nothing_pending(client, auth_headers, monkeypatch):
+    """/continue：图已结束（next 空）→ 409 CHAT_002，前端据此隐藏按钮"""
+    _patch(monkeypatch)                        # 默认 next=()
+    resp = await client.post("/api/v1/chat/stream", headers=auth_headers,
+                             json={"message": "工伤赔偿怎么计算"})
+    sid = parse_sse(resp.text)[0]["session_id"]
+
+    resp = await client.post("/api/v1/chat/continue", headers=auth_headers,
+                             json={"session_id": sid})
+
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "CHAT_002"

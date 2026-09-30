@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getSessions, getMessages, deleteSession, streamSendMessage, streamResumeMessage } from '../api/chat'
+import { getSessions, getMessages, deleteSession, streamSendMessage, streamResumeMessage, checkPending, streamContinueMessage } from '../api/chat'
 
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref([])
@@ -10,6 +10,8 @@ export const useChatStore = defineStore('chat', () => {
   const abortController = ref(null)
   // Human-in-the-Loop：当图被 interrupt 打断时，存储 interrupt 数据
   const pendingInterrupt = ref(null)
+  // 崩溃/断线恢复：会话存在待续跑的图执行（next 非空且非 HITL）时显示「继续生成」按钮
+  const canContinue = ref(false)
 
   const currentSession = computed(() =>
     sessions.value.find((s) => s.session_id === currentSessionId.value) || null
@@ -26,10 +28,29 @@ export const useChatStore = defineStore('chat', () => {
   async function loadMessages(sessionId) {
     currentSessionId.value = sessionId
     messages.value = []
+    canContinue.value = false
     try {
       messages.value = await getMessages(sessionId)
     } catch {
       // 静默处理
+    }
+    // 崩溃恢复探测：进程重启后，中断轮次没落库（历史消息里看不到），
+    // 但 checkpoint 里 next 非空——据此显示「继续生成」按钮
+    await probePending(sessionId)
+  }
+
+  /**
+   * 探测会话是否有待恢复的图执行（durable execution）。
+   * 两个时机调用：① 加载/切换会话（覆盖进程崩溃重启）② 流式异常断开后（覆盖网络波动）。
+   */
+  async function probePending(sessionId) {
+    if (!sessionId) return
+    try {
+      const { pending, interrupted } = await checkPending(sessionId)
+      // interrupted 场景由 pendingInterrupt（HITL 问答卡片）接管
+      canContinue.value = pending && !interrupted
+    } catch {
+      canContinue.value = false
     }
   }
 
@@ -37,6 +58,7 @@ export const useChatStore = defineStore('chat', () => {
     currentSessionId.value = null
     messages.value = []
     pendingInterrupt.value = null
+    canContinue.value = false
   }
 
   async function removeSession(sessionId) {
@@ -144,6 +166,11 @@ export const useChatStore = defineStore('chat', () => {
         // e.message 来自后端 problem+json 的 detail（流式端点为解析后的错误体）
         messages.value[aiIdx].content = e.message || '抱歉，消息发送失败，请重试。'
       }
+      // 网络波动恢复探测：流断了但图可能仍在跑/停在节点边界，
+      // 探测到 pending 就显示「继续生成」按钮（图已完成则探测为 false，拉历史即可）
+      if (currentSessionId.value) {
+        await probePending(currentSessionId.value)
+      }
     } finally {
       isStreaming.value = false
       abortController.value = null
@@ -189,6 +216,39 @@ export const useChatStore = defineStore('chat', () => {
     return currentSessionId.value
   }
 
+  /**
+   * 崩溃/断线恢复：点击「继续生成」按钮，从 checkpoint 续跑 pending 节点。
+   * 与 resumeInterrupt 的区别：无需用户输入、不追加 user 消息——
+   * 中断轮次的内容（已生成的部分 token 不补发，节点边界后续跑）直接写入新气泡。
+   */
+  async function continueGeneration() {
+    if (isStreaming.value) return
+    if (!currentSessionId.value || !canContinue.value) return
+
+    // 占位的 AI 回复（续跑从气泡空白处继续，已流出的部分在断线前已渲染）
+    const aiMsg = { role: 'assistant', content: '', sources: [], stages: [] }
+    messages.value.push(aiMsg)
+    const aiIdx = messages.value.length - 1
+
+    canContinue.value = false
+    isStreaming.value = true
+
+    try {
+      const { abort, stream } = streamContinueMessage(currentSessionId.value)
+      abortController.value = abort
+      await _consumeStream(stream, aiIdx)
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        messages.value[aiIdx].content = e.message || '恢复失败，请稍后重试。'
+      }
+    } finally {
+      isStreaming.value = false
+      abortController.value = null
+    }
+
+    return currentSessionId.value
+  }
+
   function cancelStream() {
     if (abortController.value) {
       abortController.value.abort()
@@ -204,6 +264,7 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     isStreaming,
     pendingInterrupt,
+    canContinue,
     currentSession,
     loadSessions,
     loadMessages,
@@ -211,6 +272,7 @@ export const useChatStore = defineStore('chat', () => {
     removeSession,
     sendMessage,
     resumeInterrupt,
+    continueGeneration,
     cancelStream,
   }
 })

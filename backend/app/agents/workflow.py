@@ -484,6 +484,18 @@ class LegalMindWorkflow:
         async for event in self._astream_events(Command(resume=user_response), config, with_intro=False):
             yield event
 
+    async def astream_continue(self, thread_id: str):
+        """崩溃/断线恢复：input=None 从 checkpoint 续跑 pending 节点（durable execution）。
+
+        与 astream_resume 的区别：resume 是协作式中断（HITL，Command 注入用户回答）；
+        continue 是故障中断（进程重启/连接断开），无新输入，纯续跑。
+        恢复粒度=节点边界：中断时未完成的节点整体重跑（token 级续传不存在），
+        消息不重复靠 add_messages 按 id 去重 + 用户消息显式 id（12.x 重要性过滤同款）。
+        """
+        config = {"configurable": {"thread_id": thread_id}}
+        async for event in self._astream_events(None, config, with_intro=False):
+            yield event
+
     async def _astream_events(self, graph_input, config: dict, with_intro: bool):
         """多路复用流式：stream_mode 传列表，同时订阅两个通道——
 

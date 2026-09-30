@@ -36,6 +36,10 @@ class ResumeRequest(BaseModel):
     session_id: str
     response: str = Field(min_length=1, max_length=2000)
 
+class ContinueRequest(BaseModel):
+    """崩溃/断线恢复：从 checkpoint 续跑 pending 节点（无需新输入）"""
+    session_id: str
+
 class ChatResponse(BaseModel):
     """聊天响应"""
     response: str
@@ -84,12 +88,34 @@ async def _check_interrupt(session_id: str) -> Optional[dict]:
     return None
 
 
+async def _check_pending(session_id: str) -> dict:
+    """探测会话是否有待恢复的图执行（durable execution 恢复探测）。
+
+    - next 非空 + 有 interrupt → HITL 协作式中断（前端显示问答卡片）
+    - next 非空 + 无 interrupt → 故障中断（崩溃/断线，前端显示「继续生成」按钮）
+    - next 为空 → 图已结束，无可恢复内容
+    """
+    graph = workflow.get_graph()
+    config = {"configurable": {"thread_id": session_id}}
+    state = await graph.aget_state(config)
+    if not state.next:
+        return {"pending": False, "interrupted": False}
+    tasks = state.tasks if hasattr(state, "tasks") else []
+    interrupted = bool(
+        tasks and hasattr(tasks[0], "interrupts") and tasks[0].interrupts
+    )
+    return {"pending": True, "interrupted": interrupted}
+
+
 async def _finalize_stream(session, query, full_text, session_id):
     """流结束后的收尾：兜底输出、记录消息、发送 sources"""
     graph = workflow.get_graph()
     config = {"configurable": {"thread_id": session_id}}
     state = await graph.aget_state(config)
     values = state.values or {}
+    # continue（崩溃恢复）路径不传 query：从 checkpoint state 里取本轮原始问题
+    if not query:
+        query = values.get("query", "")
     # 非流式节点（search/document）的 response 兜底一次性输出
     if not full_text:
         fallback = values.get("response", "")
@@ -257,7 +283,75 @@ async def resume_interrupted(request: ResumeRequest, user: User = Depends(get_cu
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-#  会话管理
+@router.post("/continue")
+async def continue_interrupted(request: ContinueRequest, user: User = Depends(get_current_user), http_request: Request = None):
+    """崩溃/断线恢复（durable execution）：从 checkpoint 续跑 pending 节点。
+
+    与 /resume 的区别：resume 恢复 HITL 协作式中断（带用户回答 Command）；
+    continue 恢复故障中断（进程重启/连接断开），无新输入，input=None 续跑。
+    无待恢复内容时返回 409（CHAT_002），前端隐藏「继续生成」按钮。
+    """
+    session = await _get_owned_session(request.session_id, user)
+    trace_id = http_request.state.trace_id if http_request else None
+    pending = await _check_pending(request.session_id)
+    if not pending["pending"] or pending["interrupted"]:
+        # 无东西可续（图已结束）或属于 HITL 场景（走 /resume）——都拒绝
+        raise ChatError(ErrorCode.CHAT_NOT_PENDING)
+
+    async def generate():
+        full_text = ""
+        try:
+            async for event in workflow.astream_continue(thread_id=request.session_id):
+                if event["type"] == "stage":
+                    stage = event["stage"]
+                    if stage.get("stage") == "reflect" and stage.get("status") == "running":
+                        full_text = ""
+                        yield f"data: {json.dumps({'revision': True}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'stage': stage}, ensure_ascii=False)}\n\n"
+                    continue
+                chunk, metadata = event["chunk"], event["metadata"]
+                node = metadata.get("langgraph_node") if metadata else None
+                if node == "qa_generation" and chunk.content:
+                    full_text += chunk.content
+                    yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
+
+            # 续跑后可能停在新的 interrupt（如检索子图 HITL）
+            interrupt_data = await _check_interrupt(request.session_id)
+            if interrupt_data:
+                yield f"data: {json.dumps({'interrupt': interrupt_data}, ensure_ascii=False)}\n\n"
+                req_usage = usage_var.get()
+                if req_usage and req_usage.calls:
+                    yield f"data: {json.dumps({'usage': req_usage.to_dict()}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            # 正常结束：query 从 checkpoint state 取（本请求没有新输入）
+            async for event in _finalize_stream(session, None, full_text, request.session_id):
+                yield event
+
+        except AppException as e:
+            yield sse_error_event(e.code.value, e.detail, trace_id)
+        except Exception:
+            logger.exception("[%s] SSE continue 流式恢复失败", trace_id)
+            yield sse_error_event("SYS_001", "服务暂时不可用，请稍后重试", trace_id)
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/sessions/{session_id}/pending")
+async def check_session_pending(session_id: str, user: User = Depends(get_current_user)):
+    """探测会话是否有待恢复的图执行（前端决定是否显示「继续生成」按钮）。
+
+    前端两个时机调用：① 加载/切换会话（覆盖进程重启后的崩溃恢复）；
+    ② 流式请求异常断开后（覆盖网络波动）。
+    """
+    await _get_owned_session(session_id, user)
+    return await _check_pending(session_id)
+
+
+#  会话管理 
 @router.get("/sessions")
 async def list_sessions(user: User = Depends(get_current_user)):
     """获取当前用户的会话列表"""
