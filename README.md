@@ -45,6 +45,7 @@
 - **📐 Structured Output** — `with_structured_output(method="function_calling")` 约束 LLM 输出格式（意图识别 / 元数据抽取 / 质量评审）
 - **🚨 统一错误体系** — RFC 9457 Problem Details 规范（type/title/status/detail/code/traceId），TraceId 纯 ASGI 中间件贯穿请求与日志，SSE 错误走结构化事件不破坏流
 - **📡 LangSmith 全链路追踪** — 覆盖意图识别 → 检索 → 重排 → 生成全链路，LCEL 管道使消息组装/模板渲染步骤可观测
+- **⏱️ 延迟观测三层打点** — TTFT（首个正文 token，端到端体验）+ queue_ms（LLM 背压两道闸排队拆分，分锅定位）+ elapsed_ms（请求总耗时）+ traceId 贯穿——"TTFT 发现问题 → queue_ms 排除排队嫌疑 → LangSmith Span 树下钻"分层排查
 - **📋 RAGAS 评估体系** — 149 条标注数据集 + RAGAS 4 指标评估（faithfulness / answer_relevancy / context_precision / context_recall）+ 自定义 LLM Judge
 
 ## 🏗️ 工作流架构

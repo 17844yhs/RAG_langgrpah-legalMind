@@ -11,7 +11,7 @@ LegalMind 是一个基于 LLM 与 RAG 技术的**智能法律咨询系统**。�
 - **RAG**: Chroma 向量数据库, BM25 混合检索, RRF 融合, BGE-Reranker-v2-m3 重排序
 - **工具**: LangChain Tool Calling（search_cases）, Pydantic 参数校验
 - **评估**: RAGAS 4 指标 + 自定义 LLM Judge
-- **可观测**: LangSmith 全链路追踪
+- **可观测**: LangSmith 全链路追踪 + 三层延迟打点（TTFT / queue_ms 背压排队 / elapsed_ms）
 - **数据库**: PostgreSQL 16, Redis 7
 - **前端**: Vue 3 (Composition API), Vite 8, Tailwind CSS 4, Pinia, Vue Router
 - **容器**: Docker Compose (PostgreSQL + Redis)
