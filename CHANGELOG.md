@@ -9,8 +9,11 @@
 
 ### 新增（2026-10-08）
 
+- **🚫 R3 ｜ 空检索显式拒答声明**：`qa_agent.build_messages` 检索结果为空（rerank 阈值滤光）时，不再渲染空数据区硬答，改注入"检索声明（本次未命中知识库）"——告知用户知识库未覆盖 + 禁止引用具体法条编号与案号（无依据即编造）+ 建议线下渠道。选声明式兜底而非硬拒答（法律咨询体验与安全的平衡）；轻单测 ×2（`test_qa_build_messages.py`，9 passed）
+- **📐 R3 ｜ rerank 阈值校准脚本**：`scripts/calibrate_rerank_threshold.py`——EvalSample 正对（question × relevant_law_ids）+ 固定种子随机负对 → bge-reranker 分数分布（P05~P95）→ 正P05/负P95 几何中点建议切点；分布重叠时报告"不可分"并维持保守低阈值。待运行出分布后决定是否上调 RAG_SCORE_THRESHOLD（0.05）并跑 RAGAS 149 条回归
 - **⏱️ 延迟观测三层打点（小林 21 题「Trace 定位延迟」对账落地）**：① **TTFT**——`chat.py _mark_ttft`，三个流式端点（stream/resume/continue）首个正文 token（qa_generation 节点，排除 stage/干扰项），空列表一次性哨兵，日志带 traceId；② **背压排队 queue_ms**——`model_client.py _BackpressureMixin._log_queue_wait`，令牌桶+信号量两道闸 acquire 前后 diff 拆分，逐 LLM 调用打点（复用 usage_tracker 的 trace_id_var ContextVar 关联请求）；③ 请求总耗时 elapsed_ms 已由 TraceIdMiddleware finally 日志承担（对齐确认，无需改）。分层排查故事：TTFT 发现问题（慢不慢）→ queue_ms 排除排队嫌疑（锅在哪——排队时间天然藏在模型耗时里，不打点会把"闸门拥堵"误诊为"模型慢"）→ LangSmith Span 树下钻剩余环节。刻意不做：P95/P99 聚合端点/Prometheus（无线上流量，elapsed 日志可事后算）、回放集/灰度（RAGAS 已承担质量护栏）
 - **📋 小林 22/23/24 题对账（零新代码，文档层）**：Multi-Agent 容错（单进程图内并行：失联/租约结构上不存在，接管=三级降级链+superstep 原子重跑，冲突=operator.add reducer，combiner 即 Integrator）；任务幻觉（只读咨询型结构上不存在，质量门控=同构验证器，引用校验 P3 观测驱动）；LLM 连库安全（模型从不接触 DB：越权/SQL 注入/查询幻觉攻击面结构上不存在，注入边界声明+错误脱敏已有同构，读写账号分离 P3）。四题（含 21 题）速答已入 面试.md 第十六章，UPGRADE_PLAN Agent 板块盘点表 21-24 行全部翻绿
+- **🚧 R2 法条时效性标记阻塞**：Law 模型无时效字段 + 4310 法条废止状态无权威批量数据源（国家法律法规数据库无公开 API）——不为空数据建 schema，方案留档待数据源
 - **📚 面试.md 新增第十六章**：四道稳定性深水区速答（延迟 Trace 定位/Multi-Agent 容错/任务幻觉/数据库安全），速查表扩至 21 题
 
 ### 新增（2026-09-29/30）
