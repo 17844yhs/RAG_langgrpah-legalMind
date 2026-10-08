@@ -1,12 +1,13 @@
 # CI/CD 流水线 — 声明式合同：GitHub 按本文件声明的触发器与步骤自动执行
 #
 # CI（每次 push/PR）：
-#   backend-tests → 起 PostgreSQL service 容器 → uv 同步依赖 → 全量 pytest
+#   backend-tests  → 起 PostgreSQL service 容器 → uv 同步依赖 → ruff → 全量 pytest
+#   frontend-build → pnpm 装依赖 → vite build（vite 编译即检查：模板/导入错误直接红）
 #   （测试体系设计自带环境适配：单元/图逻辑测试零外部依赖；API 测试
-#    探测到 PG 可达则全量运行 —— CI 里 PG service 让 46 个用例全部真跑）
+#    探测到 PG 可达则全量运行 —— CI 里 PG service 让 API 用例全部真跑）
 #
 # CD 交付半环（打 v* tag 时）：
-#   docker-image → 测试通过后构建 Docker 镜像推送 GHCR
+#   docker-image → 测试通过后构建前后端镜像推送 GHCR
 #   （部署终点站是仓库里的 docker-compose --profile prod：服务器 pull 即上线；
 #    当前无云服务器，故 CD 只自动化到"镜像交付"为止）
 
@@ -22,10 +23,17 @@ on:
 permissions:
   contents: read
 
+# 同一分支/PR 只保留最新一次运行：PR 推送密集时自动取消被取代的旧跑（省配额）；
+# master push 与 tag 不取消（避免误杀正在进行的 CD 镜像交付）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # ── CI：质量门 ──
+  # ── CI：质量门（后端） ──
   backend-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -52,12 +60,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      # setup-uv 一步到位：装 uv + 装 Python 3.14 + 按 uv.lock 哈希缓存
+      # （替代 setup-python + pip install uv 两步，依赖安装走缓存显著提速）
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.14"
-
-      - name: Install uv
-        run: python -m pip install --upgrade uv
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
 
       - name: Sync dependencies (incl. dev group)
         run: uv sync --group dev
@@ -70,11 +79,41 @@ jobs:
       - name: Run tests
         run: uv run pytest tests -v --tb=short
 
+  # ── CI：质量门（前端） ──
+  frontend-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 9 与 pnpm-lock.yaml（lockfileVersion 9.0）匹配；
+      # Dockerfile 构建阶段同样走 pnpm --frozen-lockfile，两处保持一致
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      # vite build 全量编译：模板语法错误、坏导入、TypeScript 级别的引用问题在此暴露
+      - name: Build
+        run: pnpm build
+
   # ── CD 交付半环：tag 触发，测试通过后出镜像 ──
   docker-image:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: backend-tests
+    needs: [backend-tests, frontend-build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -95,5 +134,14 @@ jobs:
           context: ./backend
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/legalmind-backend:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/legalmind-frontend:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

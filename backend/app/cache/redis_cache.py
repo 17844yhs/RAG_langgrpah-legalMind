@@ -72,10 +72,14 @@ def _get_client():
     """懒创建 Redis 客户端（redis-py 的 asyncio 实现，socket 超时 1s 快速失败）"""
     if _state["client"] is None:
         import redis.asyncio as aioredis
+        # protocol=2（RESP2）：redis-py 8 默认 RESP3，握手发 HELLO——老服务端
+        # （如 Windows Redis 3.0）不认该命令导致连接必败、缓存全程降级；
+        # RESP2 新老服务端通吃（Redis ≥2.x 均支持）
         _state["client"] = aioredis.from_url(
             settings.REDIS_URL,
             socket_connect_timeout=1.0,
             socket_timeout=1.0,
+            protocol=2,
         )
     return _state["client"]
 
