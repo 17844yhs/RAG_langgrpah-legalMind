@@ -23,6 +23,8 @@
   真 ChatModel 子类则完全透明。主备实例共享同一信号量，容灾切换后总量上限不变
 """
 import asyncio
+import logging
+import time
 
 from langchain_openai import ChatOpenAI
 from langchain_deepseek import ChatDeepSeek
@@ -30,7 +32,9 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimi
 
 from app.config import settings
 from app.llm.rate_limit import acquire_rate_token
-from app.llm.usage_tracker import TokenUsageHandler
+from app.llm.usage_tracker import TokenUsageHandler, trace_id_var
+
+logger = logging.getLogger("app.usage")
 
 _llm = None
 _usage_handler = TokenUsageHandler()
@@ -56,18 +60,37 @@ class _BackpressureMixin:
                     async with 自动释放许可，不会泄漏）
     顺序：先令牌桶（准入速率）后信号量（并发数）——桶等待发生在信号量之外，
     等待者不占用并发许可，否则限流会人为压低并发峰值（有测试为证）。
+
+    背压等待观测：两道闸的排队时长逐调用打点日志（带 traceId）。排队时间
+    天然藏在模型耗时里，不打点就会把"自家闸门堵了"误诊为"模型慢"。
     """
+    # queue_ms ：每次 LLM 调用在两道闸里的等待时长（排队→进闸），用来判断要不要改并发/限流策略 TTFT ：从 用户请求到达 到 第一个字输出 的端到端耗时——它是整体，queue_ms 是它内部的嫌疑片段之一（而且一轮问答有 3-5 段 queue_ms，不只是生成那一次）
+    @staticmethod
+    def _log_queue_wait(t0: float, bucket_wait: float) -> None:
+        """进闸成功时刻打一次：总排队 = 令牌桶 + 信号量（各自 diff 拆分）"""
+        queue_ms = (time.perf_counter() - t0) * 1000
+        bucket_ms = bucket_wait * 1000
+        logger.info(
+            "[%s] LLM 背压等待 %.1fms（令牌桶 %.1fms / 信号量 %.1fms）",
+            trace_id_var.get() or "-", queue_ms, bucket_ms, queue_ms - bucket_ms,
+        )
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        t0 = time.perf_counter()
         await acquire_rate_token()       # 令牌桶：准入控制，先于并发闸门
+        bucket_wait = time.perf_counter() - t0
         async with _get_semaphore():
+            self._log_queue_wait(t0, bucket_wait)
             return await super()._agenerate(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             )
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        t0 = time.perf_counter()
         await acquire_rate_token()       # 整段流只扣一次（启动时刻）
+        bucket_wait = time.perf_counter() - t0
         async with _get_semaphore():
+            self._log_queue_wait(t0, bucket_wait)
             async for chunk in super()._astream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
             ):

@@ -3,6 +3,7 @@ import uuid
 import json
 import logging
 import asyncio
+import time
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,19 @@ from app.models.user import User
 logger = logging.getLogger("app.error")
 
 router = APIRouter()
+
+# started 在 generate() 开头，所以 TTFT = 会话校验 + 意图识别 LLM 调用全程 + 检索全链路 （BM25/向量/rerank）+ 生成节点首 token 网络往返——端到端口径，等于用户按下发送到看见第一个字的完整等待。慢了想分锅时，才用 model_client 那层的 queue_ms 往下拆。
+def _mark_ttft(marker: list, t0: float, trace_id: str | None) -> None:
+    """TTFT（Time To First Token）：首个正文 token 相对请求开始的耗时。
+
+    流式把"等待"变成"进度"，但体感改善需要数字验证——这个指标回答
+    "慢不慢"；排队环节的"锅在哪"由 model_client 的背压日志（queue_ms）
+    分层回答，两者口径不同（端到端 vs 单次调用排队）。
+    marker 用空列表当一次性哨兵：首 token 后静默，不重复打点。
+    """
+    if not marker:
+        marker.append((time.perf_counter() - t0) * 1000)
+        logger.info("[%s] TTFT %.1fms", trace_id or "-", marker[0])
 # 请求/响应模型 
 
 class ChatMessage(BaseModel):
@@ -173,6 +187,8 @@ async def stream_message(request: ChatRequest, user: User = Depends(get_current_
 
     async def generate():
         full_text = ""
+        ttft_marker: list = []
+        started = time.perf_counter()
         try:
             # 先发 session_id，前端新会话需要用它来 resume
             yield f"data: {json.dumps({'session_id': session_id}, ensure_ascii=False)}\n\n"
@@ -190,6 +206,7 @@ async def stream_message(request: ChatRequest, user: User = Depends(get_current_
                 chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
                 if node == "qa_generation" and chunk.content:
+                    _mark_ttft(ttft_marker, started, trace_id)
                     full_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
 
@@ -235,6 +252,8 @@ async def resume_interrupted(request: ResumeRequest, user: User = Depends(get_cu
 
     async def generate():
         full_text = ""
+        ttft_marker: list = []
+        started = time.perf_counter()
         try:
             async for event in workflow.astream_resume(
                 thread_id=request.session_id,
@@ -251,6 +270,7 @@ async def resume_interrupted(request: ResumeRequest, user: User = Depends(get_cu
                 chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
                 if node == "qa_generation" and chunk.content:
+                    _mark_ttft(ttft_marker, started, trace_id)
                     full_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
 
@@ -300,6 +320,8 @@ async def continue_interrupted(request: ContinueRequest, user: User = Depends(ge
 
     async def generate():
         full_text = ""
+        ttft_marker: list = []
+        started = time.perf_counter()
         try:
             async for event in workflow.astream_continue(thread_id=request.session_id):
                 if event["type"] == "stage":
@@ -312,6 +334,7 @@ async def continue_interrupted(request: ContinueRequest, user: User = Depends(ge
                 chunk, metadata = event["chunk"], event["metadata"]
                 node = metadata.get("langgraph_node") if metadata else None
                 if node == "qa_generation" and chunk.content:
+                    _mark_ttft(ttft_marker, started, trace_id)
                     full_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content}, ensure_ascii=False)}\n\n"
 
