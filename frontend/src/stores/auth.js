@@ -29,6 +29,11 @@ export const useAuthStore = defineStore('auth', () => {
     return data
   }
 
+  async function getCaptcha() {
+    const { data } = await client.get('/auth/captcha')
+    return data
+  }
+
   function logout() {
     token.value = null
     user.value = null
@@ -41,5 +46,5 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = JSON.parse(localStorage.getItem('user') || 'null')
   }
 
-  return { token, user, isLoggedIn, username, nickname, login, register, logout, init }
+  return { token, user, isLoggedIn, username, nickname, getCaptcha, login, register, logout, init }
 })

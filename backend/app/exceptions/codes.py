@@ -21,6 +21,7 @@ class ErrorCode(str, Enum):
     AUTH_BAD_CREDENTIALS = "AUTH_004"
     AUTH_USERNAME_TAKEN = "AUTH_005"
     AUTH_EMAIL_TAKEN = "AUTH_006"
+    AUTH_CAPTCHA_INVALID = "AUTH_007"
 
     # ── 聊天（CHAT）──
     CHAT_SESSION_NOT_FOUND = "CHAT_001"
@@ -43,6 +44,7 @@ _CODE_META: dict[ErrorCode, tuple[int, str]] = {
     ErrorCode.AUTH_BAD_CREDENTIALS: (401, "用户名或密码错误"),
     ErrorCode.AUTH_USERNAME_TAKEN: (400, "用户名已注册"),
     ErrorCode.AUTH_EMAIL_TAKEN: (400, "邮箱已注册"),
+    ErrorCode.AUTH_CAPTCHA_INVALID: (400, "验证码错误或已过期"),
     ErrorCode.CHAT_SESSION_NOT_FOUND: (404, "会话不存在"),
     ErrorCode.CHAT_NOT_PENDING: (409, "当前会话没有待恢复的任务"),
     ErrorCode.CASE_NOT_FOUND: (404, "没有找到这个案例"),

@@ -5,6 +5,7 @@ from tortoise.exceptions import IntegrityError
 
 from app.models.user import User
 from app.utils.security import verify_password, get_password_hash, create_access_token
+from app.utils.captcha import generate_captcha, save_captcha, verify_captcha
 from app.config import settings
 from app.exceptions import AuthError, ErrorCode
 
@@ -16,11 +17,15 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     nickname: str = ""
+    captcha_id: str
+    captcha_code: str
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+    captcha_id: str
+    captcha_code: str
 
 
 class TokenResponse(BaseModel):
@@ -30,8 +35,28 @@ class TokenResponse(BaseModel):
     nickname: str = ""
 
 
+class CaptchaResponse(BaseModel):
+    captcha_id: str
+    image: str  # PNG data URL，前端直接 <img :src>
+
+
+@router.get("/captcha", response_model=CaptchaResponse)
+async def get_captcha():
+    """发一题验证码：图 + id；答案存 Redis（TTL 5min），提交时一次性校验"""
+    captcha_id, code, image = generate_captcha()
+    await save_captcha(captcha_id, code)
+    return CaptchaResponse(captcha_id=captcha_id, image=image)
+
+
+async def _require_captcha(captcha_id: str, captcha_code: str) -> None:
+    """验证码前置校验（一次性消费）：在查库/算 bcrypt 之前挡掉机器流量"""
+    if not await verify_captcha(captcha_id, captcha_code):
+        raise AuthError(ErrorCode.AUTH_CAPTCHA_INVALID)
+
+
 @router.post("/register", response_model=TokenResponse)
 async def register(req: RegisterRequest):
+    await _require_captcha(req.captcha_id, req.captcha_code)
     if await User.filter(username=req.username).exists():
         raise AuthError(ErrorCode.AUTH_USERNAME_TAKEN)
     if await User.filter(email=req.email).exists():
@@ -59,6 +84,7 @@ async def register(req: RegisterRequest):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest):
+    await _require_captcha(req.captcha_id, req.captcha_code)
     user = await User.get_or_none(username=req.username)
     if not user or not verify_password(req.password, user.hashed_password):
         raise AuthError(ErrorCode.AUTH_BAD_CREDENTIALS)

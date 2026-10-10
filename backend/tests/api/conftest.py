@@ -34,6 +34,50 @@ def pg_available():
     yield
 
 
+def _redis_sync():
+    """测试用同步 Redis 客户端（与 app 同款 RESP2 配置）"""
+    import redis as redis_sync
+    return redis_sync.Redis.from_url(settings.REDIS_URL,
+                                     socket_connect_timeout=1.0, protocol=2)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_captcha_client():
+    """每测重置验证码模块的懒加载客户端：模块级缓存的 aioredis 连接绑定创建时
+    的 event loop，pytest-asyncio 每测新建 loop，不复位会报 Event loop is closed
+    （生产单 loop 常驻无此问题，纯测试环境适配）"""
+    from app.utils import captcha as captcha_mod
+    captcha_mod._state["client"] = None
+    yield
+    captcha_mod._state["client"] = None
+
+
+@pytest.fixture
+def redis_available():
+    """Redis 不可达时跳过验证码相关测试（验证码 fail-closed，必须真 Redis）"""
+    try:
+        _redis_sync().ping()
+    except Exception:
+        pytest.skip("Redis 不可达，跳过验证码相关测试")
+    yield
+
+
+async def _new_captcha(client):
+    """领一题真验证码：走真实 /captcha 端点，答案从 Redis 读（等价于人工识图）"""
+    resp = await client.get("/api/v1/auth/captcha")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    code = _redis_sync().get(f"captcha:{body['captcha_id']}")
+    assert code, "验证码未落 Redis"
+    return {"captcha_id": body["captcha_id"], "captcha_code": code.decode()}
+
+
+@pytest.fixture
+def get_captcha(redis_available):
+    """领题协程函数：pair = await get_captcha(client)——一测多题时直接多次调用"""
+    return _new_captcha
+
+
 async def _probe(host, port, user, password):
     conn = await asyncpg.connect(host=host, port=port, user=user,
                                  password=password, database="postgres")
@@ -97,18 +141,20 @@ def parse_sse(text: str) -> list[dict]:
 
 
 @pytest.fixture
-async def auth_headers(client: httpx.AsyncClient):
-    """注册并登录一个随机用户，返回 Bearer 认证头"""
+async def auth_headers(client: httpx.AsyncClient, redis_available):
+    """注册并登录一个随机用户，返回 Bearer 认证头（注册/登录均需验证码）"""
     import uuid
     creds = {
         "username": f"u{uuid.uuid4().hex[:8]}",
         "email": f"{uuid.uuid4().hex[:8]}@test.com",
         "password": "Passw0rd!",
     }
-    resp = await client.post("/api/v1/auth/register", json=creds)
+    resp = await client.post("/api/v1/auth/register",
+                             json={**creds, **(await _new_captcha(client))})
     assert resp.status_code == 200, resp.text
-    login = await client.post("/api/v1/auth/login",
-                              json={"username": creds["username"],
-                                    "password": creds["password"]})
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"username": creds["username"], "password": creds["password"],
+              **(await _new_captcha(client))})
     assert login.status_code == 200, login.text
     return {"Authorization": f"Bearer {login.json()['access_token']}"}

@@ -9,8 +9,24 @@ const auth = useAuthStore()
 
 const username = ref('')
 const password = ref('')
+const captchaCode = ref('')
+const captchaId = ref('')
+const captchaImage = ref('')
 const error = ref('')
 const loading = ref(false)
+
+async function refreshCaptcha() {
+  try {
+    const c = await auth.getCaptcha()
+    captchaId.value = c.captcha_id
+    captchaImage.value = c.image
+  } catch {
+    // 验证码服务不可用时静默，提交时后端会兜底报错
+  } finally {
+    captchaCode.value = ''
+  }
+}
+refreshCaptcha()
 
 async function handleLogin() {
   error.value = ''
@@ -18,13 +34,23 @@ async function handleLogin() {
     error.value = '请填写用户名和密码'
     return
   }
+  if (!captchaCode.value) {
+    error.value = '请输入验证码'
+    return
+  }
   loading.value = true
   try {
-    await auth.login({ username: username.value, password: password.value })
+    await auth.login({
+      username: username.value,
+      password: password.value,
+      captcha_id: captchaId.value,
+      captcha_code: captchaCode.value,
+    })
     const redirect = route.query.redirect || '/chat'
     router.push(redirect)
   } catch (e) {
     error.value = e.response?.data?.detail || '登录失败，请重试'
+    await refreshCaptcha()   // 验证码一次性消费：任何失败都要换新题
   } finally {
     loading.value = false
   }
@@ -59,6 +85,29 @@ async function handleLogin() {
             class="w-full px-3 py-2 rounded-lg border text-sm outline-none transition-colors"
             :style="{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }"
           />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1" :style="{ color: 'var(--text)' }">验证码</label>
+          <div class="flex gap-2">
+            <input
+              v-model="captchaCode"
+              type="text"
+              maxlength="4"
+              placeholder="不区分大小写"
+              class="flex-1 min-w-0 px-3 py-2 rounded-lg border text-sm outline-none transition-colors"
+              :style="{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }"
+            />
+            <img
+              v-if="captchaImage"
+              :src="captchaImage"
+              alt="验证码"
+              title="看不清？点击刷新"
+              class="h-10 rounded-lg border cursor-pointer"
+              :style="{ borderColor: 'var(--border)' }"
+              @click="refreshCaptcha"
+            />
+          </div>
         </div>
 
         <div v-if="error" class="text-sm p-3 rounded-lg" style="color: #dc2626; background-color: rgba(220, 38, 38, 0.1);">
